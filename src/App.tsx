@@ -1,11 +1,11 @@
 import { useState, useRef } from 'react'
-import { WebSerialInterface, MockSerialInterface } from './drivers/SerialInterface'
+import { WebSerialInterface } from './drivers/SerialInterface'
 import type { ISerialInterface } from './drivers/SerialInterface'
 import { AT32Protocol } from './drivers/AT32Protocol'
 import { Card, Button, ProgressBar } from './components/Common'
 import { LogViewer } from './components/LogViewer'
 import { FileParsers, type FirmwareSegment } from './utils/FileParsers'
-import { Cpu, Zap, RotateCcw, FileCode, Play, AlertCircle } from 'lucide-react'
+import { Cpu, Zap, RotateCcw, FileCode, Play, AlertCircle, CheckCircle } from 'lucide-react'
 
 // --- Types ---
 type AppStatus = 'disconnected' | 'connecting' | 'connected' | 'working' | 'error';
@@ -22,7 +22,7 @@ function App() {
   const [progress, setProgress] = useState(0);
   const [progressLabel, setProgressLabel] = useState('');
   const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [useMock, setUseMock] = useState(false);
+  const [baudRate, setBaudRate] = useState(115200);
 
   // --- Refs ---
   const serialRef = useRef<ISerialInterface | null>(null);
@@ -39,10 +39,10 @@ function App() {
   const connect = async () => {
     try {
       setStatus('connecting');
-      addLog(useMock ? 'Connecting to Mock Device...' : 'Requesting Serial Port...', 'info');
+      addLog('Requesting Serial Port...', 'info');
 
-      const serial = useMock ? new MockSerialInterface() : new WebSerialInterface();
-      await serial.connect({ baudRate: 115200, parity: 'even', dataBits: 8, stopBits: 1 });
+      const serial = new WebSerialInterface();
+      await serial.connect({ baudRate, parity: 'even', dataBits: 8, stopBits: 1 });
       serialRef.current = serial;
 
       const protocol = new AT32Protocol(serial);
@@ -63,6 +63,9 @@ function App() {
       console.error(err);
       setStatus('error');
       addLog(`Connection Failed: ${err.message}`, 'error');
+      if (typeof err?.message === 'string' && err.message.includes('Timeout reading')) {
+        addLog('Please reset the MCU, switch to Bootloader mode again, and reconnect.', 'warning');
+      }
       if (serialRef.current) {
         await serialRef.current.disconnect();
         serialRef.current = null;
@@ -151,6 +154,7 @@ function App() {
     try {
       setStatus('working');
       setProgress(0);
+      setProgressLabel('Writing to Flash...');
 
       // Calculate total bytes for progress
       const totalBytes = fileInfo.segments.reduce((acc, seg) => acc + seg.data.length, 0);
@@ -188,6 +192,55 @@ function App() {
     }
   };
 
+  const verify = async () => {
+    if (!protocolRef.current || !fileInfo) return;
+    try {
+      setStatus('working');
+      setProgress(0);
+      setProgressLabel('Verifying Flash...');
+
+      const totalBytes = fileInfo.segments.reduce((acc, seg) => acc + seg.data.length, 0);
+      let verifiedBytes = 0;
+
+      addLog(`Verifying ${totalBytes} bytes in ${fileInfo.segments.length} segments...`, 'info');
+
+      const chunkSize = 256;
+
+      for (const segment of fileInfo.segments) {
+        const totalChunks = Math.ceil(segment.data.length / chunkSize);
+
+        for (let i = 0; i < totalChunks; i++) {
+          const start = i * chunkSize;
+          const end = Math.min(start + chunkSize, segment.data.length);
+          const len = end - start;
+          const addr = segment.address + start;
+
+          const readBack = await protocolRef.current.readMemory(addr, len);
+          for (let j = 0; j < len; j++) {
+            const expected = segment.data[start + j];
+            const actual = readBack[j];
+            if (expected !== actual) {
+              const failAddr = addr + j;
+              throw new Error(`Verify mismatch at 0x${failAddr.toString(16).toUpperCase()}: expected 0x${expected.toString(16).padStart(2, '0').toUpperCase()}, got 0x${actual.toString(16).padStart(2, '0').toUpperCase()}`);
+            }
+          }
+
+          verifiedBytes += len;
+          const percent = Math.round((verifiedBytes / totalBytes) * 100);
+
+          setProgress(percent);
+          setProgressLabel(`Verifying 0x${addr.toString(16).toUpperCase()}...`);
+        }
+      }
+
+      addLog('Verify Complete.', 'success');
+    } catch (err: any) {
+      addLog(`Verify Failed: ${err.message}`, 'error');
+      setStatus('error');
+    } finally {
+      setStatus('connected');
+    }
+  };
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
       <div className="w-full max-w-2xl space-y-6">
@@ -200,7 +253,7 @@ function App() {
             </div>
             <div>
               <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-cyan-300 bg-clip-text text-transparent">
-                AT32 ISP Tool
+                AT32 Utility
               </h1>
               <p className="text-slate-500 text-sm">Web Serial Bootloader Utility</p>
             </div>
@@ -208,15 +261,29 @@ function App() {
 
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-2 mr-4 px-3 py-1 bg-slate-900/50 rounded-lg border border-slate-800">
-              <span className="text-slate-400 text-xs uppercase tracking-wider font-bold">Mode</span>
-              <button
-                onClick={() => setUseMock(!useMock)}
-                className={`text-xs px-2 py-0.5 rounded cursor-pointer transition-colors ${useMock ? 'bg-amber-500/20 text-amber-300' : 'bg-slate-700 text-slate-300'}`}
+              <span className="text-slate-400 text-xs uppercase tracking-wider font-bold">Baud</span>
+              <select
+                value={baudRate}
+                onChange={(e) => setBaudRate(Number(e.target.value))}
+                disabled={status === 'connecting' || status === 'working'}
+                className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-200 border border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/40 disabled:opacity-60"
               >
-                {useMock ? 'MOCK' : 'REAL'}
-              </button>
+                <option value={1200}>1200</option>
+                <option value={2400}>2400</option>
+                <option value={4800}>4800</option>
+                <option value={9600}>9600</option>
+                <option value={14400}>14400</option>
+                <option value={19200}>19200</option>
+                <option value={28800}>28800</option>
+                <option value={38400}>38400</option>
+                <option value={57600}>57600</option>
+                <option value={76800}>76800</option>
+                <option value={115200}>115200</option>
+                <option value={128000}>128000</option>
+                <option value={230400}>230400</option>
+                <option value={256000}>256000</option>
+              </select>
             </div>
-
             {status === 'disconnected' || status === 'error' || status === 'connecting' ? (
               <Button
                 onClick={connect}
@@ -304,7 +371,7 @@ function App() {
               <div className="h-px bg-slate-800/50" />
 
               {/* Actions */}
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <Button
                   onClick={erase}
                   variant="danger"
@@ -320,6 +387,14 @@ function App() {
                   icon={<Play className="w-4 h-4" />}
                 >
                   Write to Flash
+                </Button>
+                <Button
+                  onClick={verify}
+                  variant="secondary"
+                  disabled={!fileInfo || status === 'working'}
+                  icon={<CheckCircle className="w-4 h-4" />}
+                >
+                  Verify Flash
                 </Button>
               </div>
 

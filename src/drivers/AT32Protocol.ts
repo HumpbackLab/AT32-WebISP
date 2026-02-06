@@ -8,6 +8,7 @@ export const CMD = {
     GO: 0x21,
     WRITE_MEMORY: 0x31,
     ERASE: 0x44, // Extended Erase
+    FIRMWARE_CRC: 0xAC,
 };
 
 export const ACK = 0x79;
@@ -116,6 +117,7 @@ export class AT32Protocol {
     }
 
     async readMemory(address: number, length: number): Promise<Uint8Array> {
+        if (length <= 0 || length > 256) throw new Error('Invalid read length');
         await this.sendCommand(CMD.READ_MEMORY);
 
         // Send Address
@@ -123,7 +125,8 @@ export class AT32Protocol {
 
         // Send Length (N = len - 1)
         const n = length - 1;
-        await this.serial.write(new Uint8Array([n, n ^ 0xFF]));
+        const checksum = 0xFF ^ n;
+        await this.serial.write(new Uint8Array([n, checksum]));
 
         const ack = await this.serial.read(1);
         if (ack[0] !== ACK) throw new Error('ReadMemory: Length NACK');
@@ -141,13 +144,9 @@ export class AT32Protocol {
         await this.sendCommand(CMD.WRITE_MEMORY);
         await this.sendAddress(address);
 
-        // Send length (N = len - 1)
-        const n = data.length - 1;
-        await this.serial.write(new Uint8Array([n])); // Just N, Checksum follows?
-
-        // Protocol:
-        // Host sends N (1 byte), N+1 data bytes, 1 Checksum byte
+        // Protocol: Host sends N (1 byte), N+1 data bytes, 1 Checksum byte
         // Checksum = XOR (N, data...)
+        const n = data.length - 1;
 
         let checksum = n;
         const frame = new Uint8Array(data.length + 2);
@@ -177,6 +176,34 @@ export class AT32Protocol {
 
         const ack = await this.serial.read(1, 10000); // Erase takes time
         if (ack[0] !== ACK) throw new Error('Erase All failed');
+    }
+
+    async firmwareCRC(startAddress: number, sectorCount: number): Promise<number> {
+        if (sectorCount <= 0 || sectorCount > 0x10000) {
+            throw new Error('Invalid sector count');
+        }
+
+        await this.sendCommand(CMD.FIRMWARE_CRC);
+        await this.sendAddress(startAddress);
+
+        const n = sectorCount - 1;
+        const msb = (n >> 8) & 0xFF;
+        const lsb = n & 0xFF;
+        const checksum = msb ^ lsb ^ 0xFF;
+
+        await this.serial.write(new Uint8Array([msb, lsb, checksum]));
+
+        const ack = await this.serial.read(1);
+        if (ack[0] !== ACK) throw new Error('Firmware CRC: NACK during sector count');
+
+        const crcBytes = await this.serial.read(4, 10000);
+        const crc =
+            (crcBytes[0] << 24) |
+            (crcBytes[1] << 16) |
+            (crcBytes[2] << 8) |
+            (crcBytes[3]);
+
+        return crc >>> 0;
     }
 
     private async sendAddress(addr: number): Promise<void> {
