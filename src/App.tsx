@@ -1,10 +1,10 @@
-
 import { useState, useRef } from 'react'
 import { WebSerialInterface, MockSerialInterface } from './drivers/SerialInterface'
 import type { ISerialInterface } from './drivers/SerialInterface'
 import { AT32Protocol } from './drivers/AT32Protocol'
 import { Card, Button, ProgressBar } from './components/Common'
 import { LogViewer } from './components/LogViewer'
+import { FileParsers, type FirmwareSegment } from './utils/FileParsers'
 import { Cpu, Zap, RotateCcw, FileCode, Play, AlertCircle } from 'lucide-react'
 
 // --- Types ---
@@ -15,7 +15,10 @@ function App() {
   // --- State ---
   const [status, setStatus] = useState<AppStatus>('disconnected');
   const [deviceInfo, setDeviceInfo] = useState<{ pid: number, projectID: number, version: number } | null>(null);
-  const [file, setFile] = useState<{ name: string, data: Uint8Array } | null>(null);
+
+  // File state now holds segments, not raw buffer
+  const [fileInfo, setFileInfo] = useState<{ name: string, size: number, segments: FirmwareSegment[] } | null>(null);
+
   const [progress, setProgress] = useState(0);
   const [progressLabel, setProgressLabel] = useState('');
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -50,7 +53,7 @@ function App() {
       addLog('Sync OK. Getting Device Info...', 'success');
 
       const id = await protocol.getID();
-      const ver = await protocol.getVersion(); // Optional if supported
+      const ver = await protocol.getVersion();
 
       setDeviceInfo({ ...id, version: ver.version });
       setStatus('connected');
@@ -87,8 +90,31 @@ function App() {
 
     try {
       const buf = await f.arrayBuffer();
-      setFile({ name: f.name, data: new Uint8Array(buf) });
-      addLog(`Loaded ${f.name} (${buf.byteLength} bytes)`, 'info');
+      let segments: FirmwareSegment[] = [];
+
+      if (f.name.toLowerCase().endsWith('.hex')) {
+        const text = new TextDecoder().decode(buf);
+        segments = FileParsers.parseHex(text);
+        addLog(`Parsed HEX file. Found ${segments.length} segments.`, 'info');
+      } else if (f.name.toLowerCase().endsWith('.elf')) {
+        segments = FileParsers.parseElf(buf);
+        addLog(`Parsed ELF file. Found ${segments.length} loadable segments.`, 'info');
+      } else {
+        // Default to .bin
+        segments = FileParsers.parseBin(buf);
+        addLog(`Parsed Binary file. (Base: 0x08000000)`, 'info');
+      }
+
+      if (segments.length === 0) {
+        throw new Error("No loadable data found in file.");
+      }
+
+      setFileInfo({
+        name: f.name,
+        size: buf.byteLength,
+        segments
+      });
+
     } catch (err: any) {
       addLog(`Failed to load file: ${err.message}`, 'error');
     }
@@ -121,27 +147,36 @@ function App() {
   };
 
   const program = async () => {
-    if (!protocolRef.current || !file) return;
+    if (!protocolRef.current || !fileInfo) return;
     try {
       setStatus('working');
       setProgress(0);
-      addLog(`Programming ${file.data.length} bytes...`, 'info');
+
+      // Calculate total bytes for progress
+      const totalBytes = fileInfo.segments.reduce((acc, seg) => acc + seg.data.length, 0);
+      let writtenBytes = 0;
+
+      addLog(`Programming ${totalBytes} bytes in ${fileInfo.segments.length} segments...`, 'info');
 
       const chunkSize = 256;
-      const totalChunks = Math.ceil(file.data.length / chunkSize);
-      const baseAddress = 0x08000000; // AT32 Flash Start
 
-      for (let i = 0; i < totalChunks; i++) {
-        const start = i * chunkSize;
-        const end = Math.min(start + chunkSize, file.data.length);
-        const chunk = file.data.slice(start, end);
-        const addr = baseAddress + start;
+      for (const segment of fileInfo.segments) {
+        const totalChunks = Math.ceil(segment.data.length / chunkSize);
 
-        await protocolRef.current.writeMemory(addr, chunk);
+        for (let i = 0; i < totalChunks; i++) {
+          const start = i * chunkSize;
+          const end = Math.min(start + chunkSize, segment.data.length);
+          const chunk = segment.data.slice(start, end);
+          const addr = segment.address + start;
 
-        const percent = Math.round(((i + 1) / totalChunks) * 100);
-        setProgress(percent);
-        setProgressLabel(`Writing ${start + chunk.length} bytes to 0x${addr.toString(16)}...`);
+          await protocolRef.current.writeMemory(addr, chunk);
+
+          writtenBytes += chunk.length;
+          const percent = Math.round((writtenBytes / totalBytes) * 100);
+
+          setProgress(percent);
+          setProgressLabel(`Writing to 0x${addr.toString(16).toUpperCase()}...`);
+        }
       }
 
       addLog('Programming Complete.', 'success');
@@ -176,12 +211,11 @@ function App() {
               <span className="text-slate-400 text-xs uppercase tracking-wider font-bold">Mode</span>
               <button
                 onClick={() => setUseMock(!useMock)}
-                className={`text-xs px-2 py-0.5 rounded ${useMock ? 'bg-amber-500/20 text-amber-300' : 'bg-slate-700 text-slate-300'}`}
+                className={`text-xs px-2 py-0.5 rounded cursor-pointer transition-colors ${useMock ? 'bg-amber-500/20 text-amber-300' : 'bg-slate-700 text-slate-300'}`}
               >
                 {useMock ? 'MOCK' : 'REAL'}
               </button>
             </div>
-
 
             {status === 'disconnected' || status === 'error' || status === 'connecting' ? (
               <Button
@@ -246,20 +280,23 @@ function App() {
                   type="file"
                   ref={fileInputRef}
                   onChange={handleFileSelect}
-                  accept=".bin"
+                  accept=".bin,.hex,.elf"
                   className="hidden"
                 />
                 <div className="flex items-center gap-4">
                   <Button variant="secondary" onClick={() => fileInputRef.current?.click()} icon={<FileCode className="w-4 h-4" />}>
-                    Select Firmware (.bin)
+                    Select Firmware
                   </Button>
-                  {file ? (
+                  {fileInfo ? (
                     <div className="flex-1 flex items-center justify-between px-4 py-2 bg-slate-900/50 rounded-lg border border-slate-700/50">
-                      <span className="text-slate-200 font-mono text-sm">{file.name}</span>
-                      <span className="text-slate-500 text-xs">{(file.data.length / 1024).toFixed(1)} KB</span>
+                      <span className="text-slate-200 font-mono text-sm">{fileInfo.name}</span>
+                      <div className='text-right'>
+                        <span className="text-slate-500 text-xs block">{(fileInfo.size / 1024).toFixed(1)} KB</span>
+                        <span className="text-slate-600 text-[10px] block">{fileInfo.segments.length} Segment(s)</span>
+                      </div>
                     </div>
                   ) : (
-                    <span className="text-slate-500 italic text-sm">No file selected</span>
+                    <span className="text-slate-500 italic text-sm">Supports .bin, .hex, .elf</span>
                   )}
                 </div>
               </div>
@@ -279,7 +316,7 @@ function App() {
                 <Button
                   onClick={program}
                   variant="success"
-                  disabled={!file || status === 'working'}
+                  disabled={!fileInfo || status === 'working'}
                   icon={<Play className="w-4 h-4" />}
                 >
                   Write to Flash
