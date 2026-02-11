@@ -15,13 +15,17 @@ A browser-based firmware programming utility for AT32 microcontrollers using Web
 
 ## Quick Start
 
-### Option 1: Download Pre-built Release
+### Option 1: Use Online Version (Recommended)
+
+Visit **[https://humpbacklab.github.io/AT32-WebISP/](https://HumpbackLab.github.io/AT32-WebISP/)** to use the app directly in your browser - no download required!
+
+### Option 2: Download Pre-built Release
 
 1. Download the latest `index.html` from [Releases](https://github.com/HumpbackLab/AT32-WebISP/releases)
 2. Open the file in a modern browser (Chrome or Edge recommended)
 3. Connect your AT32 device and start programming
 
-### Option 2: Build from Source
+### Option 3: Build from Source
 
 ```bash
 # Clone the repository
