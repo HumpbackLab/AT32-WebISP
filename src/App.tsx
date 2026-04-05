@@ -1,17 +1,18 @@
 import { useState, useRef } from 'react'
-import { WebSerialInterface } from './drivers/SerialInterface'
+import { MockSerialInterface, WebSerialInterface } from './drivers/SerialInterface'
 import type { ISerialInterface } from './drivers/SerialInterface'
 import { AT32Protocol } from './drivers/AT32Protocol'
 import { DEVICE_PROFILES, getSectorsForSegments, type DeviceProfileId } from './drivers/deviceProfiles'
 import { Card, Button, ProgressBar } from './components/Common'
 import { LogViewer } from './components/LogViewer'
 import { FileParsers, type FirmwareSegment } from './utils/FileParsers'
-import { Cpu, Zap, RotateCcw, FileCode, Play, AlertCircle, CheckCircle } from 'lucide-react'
+import { Cpu, Zap, RotateCcw, FileCode, Play, AlertCircle, CheckCircle, MonitorPlay } from 'lucide-react'
 
 // --- Types ---
 type AppStatus = 'disconnected' | 'connecting' | 'connected' | 'working' | 'error';
 interface LogEntry { id: number; time: string; message: string; type: 'info' | 'success' | 'error' | 'warning' }
 type EraseMode = 'unknown' | 'full-chip' | 'sector';
+type ConnectionMode = 'serial' | 'demo' | null;
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -32,6 +33,7 @@ function App() {
   const [eraseMode, setEraseMode] = useState<EraseMode>('unknown');
   const [detectedFamily, setDetectedFamily] = useState<'unknown' | 'at32f43x' | 'other'>('unknown');
   const [selectedProfileId, setSelectedProfileId] = useState<DeviceProfileId | ''>('');
+  const [connectionMode, setConnectionMode] = useState<ConnectionMode>(null);
 
   // --- Refs ---
   const serialRef = useRef<ISerialInterface | null>(null);
@@ -46,19 +48,18 @@ function App() {
   };
 
   // --- Actions ---
-  const connect = async () => {
+  const connectWithInterface = async (serial: ISerialInterface, mode: ConnectionMode) => {
     try {
       setStatus('connecting');
-      addLog('Requesting Serial Port...', 'info');
-
-      const serial = new WebSerialInterface();
+      addLog(mode === 'demo' ? 'Starting Demo Mode...' : 'Requesting Serial Port...', 'info');
       await serial.connect({ baudRate, parity: 'even', dataBits: 8, stopBits: 1 });
       serialRef.current = serial;
+      setConnectionMode(mode);
 
       const protocol = new AT32Protocol(serial);
       protocolRef.current = protocol;
 
-      addLog('Port Opened. Syncing...', 'info');
+      addLog(mode === 'demo' ? 'Demo transport ready. Syncing...' : 'Port Opened. Syncing...', 'info');
       await protocol.sync();
       addLog('Sync OK. Getting Device Info...', 'success');
 
@@ -77,8 +78,13 @@ function App() {
         setEraseMode(isF435437Family ? 'unknown' : 'full-chip');
 
         if (isF435437Family) {
+          if (mode === 'demo') {
+            setSelectedProfileId('at32f43x-xgt7');
+          }
           addLog('Detected AT32F435/F437-compatible bootloader.', 'info');
-          addLog('Select the exact AT32F43x capacity tier before partial sector erase.', 'warning');
+          addLog(mode === 'demo'
+            ? 'Demo Mode defaulted to the AT32F43x xGT7 device profile.'
+            : 'Select the exact AT32F43x capacity tier before partial sector erase.', 'warning');
         } else {
           addLog('Unknown or non-F435/F437 device. Programming will fall back to full-chip erase.', 'warning');
         }
@@ -102,7 +108,16 @@ function App() {
         await serialRef.current.disconnect();
         serialRef.current = null;
       }
+      setConnectionMode(null);
     }
+  };
+
+  const connect = async () => {
+    await connectWithInterface(new WebSerialInterface(), 'serial');
+  };
+
+  const connectDemo = async () => {
+    await connectWithInterface(new MockSerialInterface(), 'demo');
   };
 
   const disconnect = async () => {
@@ -117,6 +132,7 @@ function App() {
       setEraseMode('unknown');
       setDetectedFamily('unknown');
       setSelectedProfileId('');
+      setConnectionMode(null);
       setStatus('disconnected');
       setDeviceInfo(null);
       addLog('Disconnected.', 'warning');
@@ -304,10 +320,10 @@ function App() {
   };
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
-      <div className="w-full max-w-2xl space-y-6">
+      <div className="w-full max-w-5xl space-y-6">
 
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
           <div className="flex items-center gap-3">
             <div className="p-3 bg-blue-600/20 rounded-xl border border-blue-500/30 text-blue-400">
               <Cpu className="w-8 h-8" />
@@ -320,8 +336,8 @@ function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <div className="flex items-center gap-2 mr-4 px-3 py-1 bg-slate-900/50 rounded-lg border border-slate-800">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-end">
+            <div className="flex items-center gap-2 px-3 py-1 bg-slate-900/50 rounded-lg border border-slate-800 w-fit">
               <span className="text-slate-400 text-xs uppercase tracking-wider font-bold">Baud</span>
               <select
                 value={baudRate}
@@ -346,13 +362,23 @@ function App() {
               </select>
             </div>
             {status === 'disconnected' || status === 'error' || status === 'connecting' ? (
-              <Button
-                onClick={connect}
-                loading={status === 'connecting'}
-                icon={<Zap className="w-4 h-4" />}
-              >
-                {status === 'connecting' ? 'Connecting...' : 'Connect Device'}
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  onClick={connect}
+                  loading={status === 'connecting'}
+                  icon={<Zap className="w-4 h-4" />}
+                >
+                  {status === 'connecting' ? 'Connecting...' : 'Connect Device'}
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={connectDemo}
+                  disabled={status === 'connecting'}
+                  icon={<MonitorPlay className="w-4 h-4" />}
+                >
+                  Demo Mode
+                </Button>
+              </div>
             ) : (
               <Button variant="danger" onClick={disconnect} icon={<RotateCcw className="w-4 h-4" />}>
                 Disconnect
@@ -383,7 +409,7 @@ function App() {
                 <span className="text-slate-500 text-xs uppercase font-bold tracking-wider mb-1">Status</span>
                 <div className="flex items-center gap-2 text-emerald-400 font-medium">
                   <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
-                  Connected
+                  {connectionMode === 'demo' ? 'Demo Connected' : 'Connected'}
                 </div>
               </Card>
               <Card className="flex flex-col items-center justify-center py-4">
@@ -416,9 +442,19 @@ function App() {
               </Card>
             </div>
 
+            {connectionMode === 'demo' && (
+              <Card className="flex items-center justify-between gap-4 border-cyan-500/30 bg-cyan-500/5">
+                <div>
+                  <div className="text-cyan-200 font-medium">Demo Mode</div>
+                  <div className="text-slate-400 text-sm">Using a simulated AT32 device so users can explore the UI without real serial hardware.</div>
+                </div>
+                <div className="text-cyan-300 text-xs uppercase tracking-[0.2em] font-bold">Simulation</div>
+              </Card>
+            )}
+
             {detectedFamily === 'at32f43x' && (
               <Card className="space-y-3">
-                <div className="flex items-center justify-between gap-4">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                   <div>
                     <div className="text-slate-300 font-medium">AT32F43x Device Profile</div>
                     <div className="text-slate-500 text-sm">Choose the exact capacity tier before partial erase.</div>
@@ -427,7 +463,7 @@ function App() {
                     value={selectedProfileId}
                     onChange={(e) => setSelectedProfileId(e.target.value as DeviceProfileId | '')}
                     disabled={status === 'working'}
-                    className="min-w-64 text-sm px-3 py-2 rounded-lg bg-slate-900 text-slate-200 border border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/40 disabled:opacity-60"
+                    className="w-full lg:w-auto lg:min-w-72 text-sm px-3 py-2 rounded-lg bg-slate-900 text-slate-200 border border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/40 disabled:opacity-60"
                   >
                     <option value="">Select profile...</option>
                     <option value="at32f43x-xgt7">{DEVICE_PROFILES['at32f43x-xgt7'].label}</option>
