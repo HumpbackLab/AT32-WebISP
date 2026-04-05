@@ -18,6 +18,11 @@ interface SerialOptions {
 
 interface Navigator {
     serial: {
-        requestPort(options?: any): Promise<SerialPort>;
+        requestPort(options?: SerialPortRequestOptions): Promise<SerialPort>;
     }
+}
+
+interface SerialPortRequestOptions {
+    filters?: unknown[];
+    allowedBluetoothServiceClassIds?: number[];
 }
