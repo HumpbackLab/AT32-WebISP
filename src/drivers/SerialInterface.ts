@@ -126,6 +126,12 @@ export class WebSerialInterface implements ISerialInterface {
 export class MockSerialInterface implements ISerialInterface {
   public status: ConnectionStatus = 'disconnected';
   private buffer: number[] = [];
+  private pendingCommand: number | null = null;
+  private pendingAddress: number | null = null;
+  private readonly flashBase = 0x08000000;
+  private readonly flashSize = 1024 * 1024;
+  private readonly sectorSize = 2 * 1024;
+  private readonly flash = new Uint8Array(this.flashSize).fill(0xFF);
 
   constructor() {
     console.log("Mock Serial Initialized");
@@ -168,6 +174,11 @@ export class MockSerialInterface implements ISerialInterface {
   private processCommand(data: Uint8Array) {
     if (data.length === 0) return;
 
+    if (this.pendingCommand !== null) {
+      this.processPendingFrame(data);
+      return;
+    }
+
     const byte = data[0];
 
     // Sync 0x7F -> 0x79
@@ -176,25 +187,168 @@ export class MockSerialInterface implements ISerialInterface {
       return;
     }
 
-    // Command Simulation
-    // Get ID: 0x02, 0xFD -> ACK(0x79), N=4(0x04), Data(4 bytes), PID(1 byte), ACK(0x79)
-    if (byte === 0x02 && data[1] === 0xFD) {
-      this.push([0x79]); // Pre-ACK
-      setTimeout(() => {
-        // Length 4+1 = 5 bytes total payload. N = Length-1?
-        // Protocol: 1 byte len-1. If 5 bytes, value is 4.
-        const pid = [0x41, 0x54, 0x33, 0x32]; // AT32
-        const prid = 0x01;
-        this.push([0x04, ...pid, prid, 0x79]);
-      }, 50);
+    if (data.length === 2 && (data[0] ^ data[1]) === 0xFF) {
+      const cmd = data[0];
+      this.push([0x79]);
+
+      switch (cmd) {
+        case 0x01: // Get Version
+          setTimeout(() => this.push([0x20, 0x00, 0x00, 0x79]), 20);
+          return;
+        case 0x02: // Get ID
+          setTimeout(() => {
+            const pid = [0x43, 0x35, 0x00, 0x10];
+            const projectId = 0x01;
+            this.push([0x04, ...pid, projectId, 0x79]);
+          }, 20);
+          return;
+        case 0x11: // Read Memory
+        case 0x31: // Write Memory
+        case 0x44: // Erase
+          this.pendingCommand = cmd;
+          this.pendingAddress = null;
+          return;
+        case 0xD2: // Get sLib Status
+          // 16-byte payload identifies the demo target as AT32F43x family.
+          setTimeout(() => this.push([
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x79
+          ]), 20);
+          return;
+        default:
+          return;
+      }
+    }
+  }
+
+  private processPendingFrame(data: Uint8Array) {
+    switch (this.pendingCommand) {
+      case 0x11:
+        this.processReadMemoryFrame(data);
+        return;
+      case 0x31:
+        this.processWriteMemoryFrame(data);
+        return;
+      case 0x44:
+        this.processEraseFrame(data);
+        return;
+      default:
+        this.pendingCommand = null;
+        this.pendingAddress = null;
+    }
+  }
+
+  private processReadMemoryFrame(data: Uint8Array) {
+    if (this.pendingAddress === null) {
+      this.pendingAddress = this.parseAddressFrame(data);
+      this.push([0x79]);
       return;
     }
 
-    // Default ACK for any command for now to pass "cmd" check
-    if (data.length === 2 && (data[0] ^ data[1]) === 0xFF) {
-      // Valid xor command
-      this.push([0x79]); // ACK
+    const length = data[0] + 1;
+    const expectedChecksum = 0xFF ^ data[0];
+    if (data.length !== 2 || data[1] !== expectedChecksum) {
+      throw new Error('Mock ReadMemory checksum mismatch');
     }
+
+    const offset = this.toFlashOffset(this.pendingAddress);
+    this.push([0x79]);
+    this.push(Array.from(this.flash.slice(offset, offset + length)));
+    this.pendingCommand = null;
+    this.pendingAddress = null;
+  }
+
+  private processWriteMemoryFrame(data: Uint8Array) {
+    if (this.pendingAddress === null) {
+      this.pendingAddress = this.parseAddressFrame(data);
+      this.push([0x79]);
+      return;
+    }
+
+    const length = data[0] + 1;
+    if (data.length !== length + 2) {
+      throw new Error('Mock WriteMemory frame length mismatch');
+    }
+
+    let checksum = data[0];
+    for (let i = 1; i < data.length - 1; i++) {
+      checksum ^= data[i];
+    }
+    if (checksum !== data[data.length - 1]) {
+      throw new Error('Mock WriteMemory checksum mismatch');
+    }
+
+    const offset = this.toFlashOffset(this.pendingAddress);
+    this.flash.set(data.slice(1, data.length - 1), offset);
+    this.push([0x79]);
+    this.pendingCommand = null;
+    this.pendingAddress = null;
+  }
+
+  private processEraseFrame(data: Uint8Array) {
+    if (data.length < 3) {
+      throw new Error('Mock Erase frame too short');
+    }
+
+    if (data[0] === 0xFF && data[1] === 0xFF) {
+      this.flash.fill(0xFF);
+      this.push([0x79]);
+      this.pendingCommand = null;
+      this.pendingAddress = null;
+      return;
+    }
+
+    const count = (data[0] << 8) | data[1];
+    const expectedLength = 2 + (count + 1) * 2 + 1;
+    if (data.length === expectedLength) {
+      let checksum = data[0] ^ data[1];
+      for (let i = 0; i < count + 1; i++) {
+        const msb = data[2 + i * 2];
+        const lsb = data[3 + i * 2];
+        checksum ^= msb ^ lsb;
+        const sector = (msb << 8) | lsb;
+        this.eraseSector(sector);
+      }
+      if (checksum !== data[data.length - 1]) {
+        throw new Error('Mock EraseSectors checksum mismatch');
+      }
+      this.push([0x79]);
+      this.pendingCommand = null;
+      this.pendingAddress = null;
+      return;
+    }
+
+    throw new Error('Mock Erase command is not supported for this frame');
+  }
+
+  private parseAddressFrame(data: Uint8Array): number {
+    if (data.length !== 5) {
+      throw new Error('Mock address frame length mismatch');
+    }
+
+    const checksum = data[0] ^ data[1] ^ data[2] ^ data[3];
+    if (checksum !== data[4]) {
+      throw new Error('Mock address checksum mismatch');
+    }
+
+    return ((data[0] << 24) >>> 0) | (data[1] << 16) | (data[2] << 8) | data[3];
+  }
+
+  private toFlashOffset(address: number): number {
+    const offset = address - this.flashBase;
+    if (offset < 0 || offset >= this.flash.length) {
+      throw new Error(`Mock flash address out of range: 0x${address.toString(16).toUpperCase()}`);
+    }
+    return offset;
+  }
+
+  private eraseSector(sector: number) {
+    const start = sector * this.sectorSize;
+    const end = Math.min(start + this.sectorSize, this.flash.length);
+    this.flash.fill(0xFF, start, end);
   }
 
   private push(bytes: number[]) {
