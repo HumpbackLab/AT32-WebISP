@@ -9,6 +9,7 @@ export const CMD = {
     WRITE_MEMORY: 0x31,
     ERASE: 0x44, // Extended Erase
     FIRMWARE_CRC: 0xAC,
+    GET_SLIB_STATUS: 0xD2,
 };
 
 export const ACK = 0x79;
@@ -176,6 +177,93 @@ export class AT32Protocol {
 
         const ack = await this.serial.read(1, 10000); // Erase takes time
         if (ack[0] !== ACK) throw new Error('Erase All failed');
+    }
+
+    async eraseSectors(indices: number[]): Promise<void> {
+        if (indices.length === 0) {
+            return;
+        }
+
+        if (indices.length > 0x10000) {
+            throw new Error('Too many sectors to erase');
+        }
+
+        await this.sendCommand(CMD.ERASE); // 0x44
+
+        const count = indices.length - 1;
+        const frame = new Uint8Array(2 + indices.length * 2 + 1);
+        frame[0] = (count >> 8) & 0xFF;
+        frame[1] = count & 0xFF;
+
+        let checksum = frame[0] ^ frame[1];
+
+        for (let i = 0; i < indices.length; i++) {
+            const index = indices[i];
+            if (index < 0 || index > 0xFFFF) {
+                throw new Error(`Invalid sector index: ${index}`);
+            }
+
+            const msb = (index >> 8) & 0xFF;
+            const lsb = index & 0xFF;
+            const offset = 2 + i * 2;
+            frame[offset] = msb;
+            frame[offset + 1] = lsb;
+            checksum ^= msb ^ lsb;
+        }
+
+        frame[frame.length - 1] = checksum;
+
+        await this.serial.write(frame);
+
+        const ack = await this.serial.read(1, 10000);
+        if (ack[0] !== ACK) {
+            throw new Error('Sector erase failed');
+        }
+    }
+
+    async eraseBlock(address: number): Promise<void> {
+        await this.sendCommand(CMD.ERASE); // 0x44
+
+        const code1 = 0xFF;
+        const code2 = 0xFB; // Block erase
+        const eraseChecksum = code1 ^ code2;
+
+        const b3 = (address >> 24) & 0xFF;
+        const b2 = (address >> 16) & 0xFF;
+        const b1 = (address >> 8) & 0xFF;
+        const b0 = address & 0xFF;
+        const addressChecksum = b3 ^ b2 ^ b1 ^ b0;
+
+        await this.serial.write(new Uint8Array([
+            code1, code2, eraseChecksum,
+            b3, b2, b1, b0, addressChecksum
+        ]));
+
+        const ack = await this.serial.read(1, 10000);
+        if (ack[0] !== ACK) {
+            throw new Error(`Block erase failed at 0x${address.toString(16).toUpperCase()}`);
+        }
+    }
+
+    async detectF435437Family(): Promise<boolean> {
+        await this.sendCommand(CMD.GET_SLIB_STATUS);
+
+        // AT32F435xx/AT32F437xx return 16 bytes here.
+        // Other series return 12 bytes followed by the final ACK.
+        await this.serial.read(12);
+        const next = await this.serial.read(1);
+
+        if (next[0] === ACK) {
+            return false;
+        }
+
+        await this.serial.read(3);
+        const ack = await this.serial.read(1);
+        if (ack[0] !== ACK) {
+            throw new Error('Get sLib Status: Missing final ACK');
+        }
+
+        return true;
     }
 
     async firmwareCRC(startAddress: number, sectorCount: number): Promise<number> {

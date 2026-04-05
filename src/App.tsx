@@ -2,6 +2,7 @@ import { useState, useRef } from 'react'
 import { WebSerialInterface } from './drivers/SerialInterface'
 import type { ISerialInterface } from './drivers/SerialInterface'
 import { AT32Protocol } from './drivers/AT32Protocol'
+import { DEVICE_PROFILES, getSectorsForSegments, type DeviceProfileId } from './drivers/deviceProfiles'
 import { Card, Button, ProgressBar } from './components/Common'
 import { LogViewer } from './components/LogViewer'
 import { FileParsers, type FirmwareSegment } from './utils/FileParsers'
@@ -10,6 +11,11 @@ import { Cpu, Zap, RotateCcw, FileCode, Play, AlertCircle, CheckCircle } from 'l
 // --- Types ---
 type AppStatus = 'disconnected' | 'connecting' | 'connected' | 'working' | 'error';
 interface LogEntry { id: number; time: string; message: string; type: 'info' | 'success' | 'error' | 'warning' }
+type EraseMode = 'unknown' | 'full-chip' | 'sector';
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function App() {
   // --- State ---
@@ -23,11 +29,15 @@ function App() {
   const [progressLabel, setProgressLabel] = useState('');
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [baudRate, setBaudRate] = useState(115200);
+  const [eraseMode, setEraseMode] = useState<EraseMode>('unknown');
+  const [detectedFamily, setDetectedFamily] = useState<'unknown' | 'at32f43x' | 'other'>('unknown');
+  const [selectedProfileId, setSelectedProfileId] = useState<DeviceProfileId | ''>('');
 
   // --- Refs ---
   const serialRef = useRef<ISerialInterface | null>(null);
   const protocolRef = useRef<AT32Protocol | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const detectedFamilyRef = useRef<'unknown' | 'at32f43x' | 'other'>('unknown');
 
   // --- Helpers ---
   const addLog = (msg: string, type: LogEntry['type'] = 'info') => {
@@ -59,11 +69,33 @@ function App() {
       setStatus('connected');
       addLog(`Connected: PID 0x${id.pid.toString(16).toUpperCase()} (Ver ${ver.version})`, 'success');
 
-    } catch (err: any) {
+      try {
+        const isF435437Family = await protocol.detectF435437Family();
+        const family = isF435437Family ? 'at32f43x' : 'other';
+        detectedFamilyRef.current = family;
+        setDetectedFamily(family);
+        setEraseMode(isF435437Family ? 'unknown' : 'full-chip');
+
+        if (isF435437Family) {
+          addLog('Detected AT32F435/F437-compatible bootloader.', 'info');
+          addLog('Select the exact AT32F43x capacity tier before partial sector erase.', 'warning');
+        } else {
+          addLog('Unknown or non-F435/F437 device. Programming will fall back to full-chip erase.', 'warning');
+        }
+      } catch (err: unknown) {
+        detectedFamilyRef.current = 'other';
+        setDetectedFamily('other');
+        setEraseMode('full-chip');
+        addLog(`Could not determine AT32F43x family support: ${getErrorMessage(err)}`, 'warning');
+        addLog('Programming will fall back to full-chip erase for safety.', 'warning');
+      }
+
+    } catch (err: unknown) {
       console.error(err);
       setStatus('error');
-      addLog(`Connection Failed: ${err.message}`, 'error');
-      if (typeof err?.message === 'string' && err.message.includes('Timeout reading')) {
+      const message = getErrorMessage(err);
+      addLog(`Connection Failed: ${message}`, 'error');
+      if (message.includes('Timeout reading')) {
         addLog('Please reset the MCU, switch to Bootloader mode again, and reconnect.', 'warning');
       }
       if (serialRef.current) {
@@ -76,11 +108,15 @@ function App() {
   const disconnect = async () => {
     try {
       if (serialRef.current) await serialRef.current.disconnect();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
     } finally {
       serialRef.current = null;
       protocolRef.current = null;
+      detectedFamilyRef.current = 'unknown';
+      setEraseMode('unknown');
+      setDetectedFamily('unknown');
+      setSelectedProfileId('');
       setStatus('disconnected');
       setDeviceInfo(null);
       addLog('Disconnected.', 'warning');
@@ -118,8 +154,8 @@ function App() {
         segments
       });
 
-    } catch (err: any) {
-      addLog(`Failed to load file: ${err.message}`, 'error');
+    } catch (err: unknown) {
+      addLog(`Failed to load file: ${getErrorMessage(err)}`, 'error');
     }
   };
 
@@ -142,8 +178,8 @@ function App() {
       clearInterval(interval);
       setProgress(100);
       addLog('Erase Complete', 'success');
-    } catch (err: any) {
-      addLog(`Erase Failed: ${err.message}`, 'error');
+    } catch (err: unknown) {
+      addLog(`Erase Failed: ${getErrorMessage(err)}`, 'error');
     } finally {
       setStatus('connected');
     }
@@ -154,13 +190,38 @@ function App() {
     try {
       setStatus('working');
       setProgress(0);
-      setProgressLabel('Writing to Flash...');
+      setProgressLabel('Preparing erase plan...');
 
       // Calculate total bytes for progress
       const totalBytes = fileInfo.segments.reduce((acc, seg) => acc + seg.data.length, 0);
       let writtenBytes = 0;
 
       addLog(`Programming ${totalBytes} bytes in ${fileInfo.segments.length} segments...`, 'info');
+
+      if (detectedFamilyRef.current === 'at32f43x') {
+        if (!selectedProfileId) {
+          throw new Error('Select the exact AT32F43x device profile before programming.');
+        }
+
+        const profile = DEVICE_PROFILES[selectedProfileId];
+        const eraseSectors = getSectorsForSegments(profile, fileInfo.segments);
+        setEraseMode('sector');
+        addLog(`Using ${profile.label} sector layout for partial erase.`, 'info');
+        addLog(`Erasing ${eraseSectors.length} sector(s) from file coverage before programming...`, 'info');
+        setProgressLabel(`Erasing ${eraseSectors.length} sector(s)...`);
+        await protocolRef.current.eraseSectors(eraseSectors);
+        setProgress(100);
+      } else {
+        setEraseMode('full-chip');
+        setProgressLabel('Unknown device, erasing full chip...');
+        addLog('Unknown or unsupported device for sector erase. Falling back to full-chip erase before programming.', 'warning');
+        await protocolRef.current.eraseAll();
+        setProgress(100);
+      }
+
+      addLog('Erase Complete. Starting program write...', 'success');
+      setProgress(0);
+      setProgressLabel('Writing to Flash...');
 
       const chunkSize = 256;
 
@@ -184,8 +245,8 @@ function App() {
       }
 
       addLog('Programming Complete.', 'success');
-    } catch (err: any) {
-      addLog(`Programming Failed: ${err.message}`, 'error');
+    } catch (err: unknown) {
+      addLog(`Programming Failed: ${getErrorMessage(err)}`, 'error');
       setStatus('error');
     } finally {
       setStatus('connected');
@@ -234,8 +295,8 @@ function App() {
       }
 
       addLog('Verify Complete.', 'success');
-    } catch (err: any) {
-      addLog(`Verify Failed: ${err.message}`, 'error');
+    } catch (err: unknown) {
+      addLog(`Verify Failed: ${getErrorMessage(err)}`, 'error');
       setStatus('error');
     } finally {
       setStatus('connected');
@@ -317,7 +378,7 @@ function App() {
         {(status === 'connected' || status === 'working') && (
           <div className="space-y-4">
             {/* Device Info */}
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <Card className="flex flex-col items-center justify-center py-4 bg-blue-500/5 border-blue-500/20">
                 <span className="text-slate-500 text-xs uppercase font-bold tracking-wider mb-1">Status</span>
                 <div className="flex items-center gap-2 text-emerald-400 font-medium">
@@ -337,7 +398,44 @@ function App() {
                   v{deviceInfo ? deviceInfo.version : '?'}
                 </span>
               </Card>
+              <Card className="flex flex-col items-center justify-center py-4">
+                <span className="text-slate-500 text-xs uppercase font-bold tracking-wider mb-1">Erase Mode</span>
+                <span className={`text-sm font-medium ${
+                  eraseMode === 'sector'
+                    ? 'text-cyan-300'
+                    : eraseMode === 'full-chip'
+                      ? 'text-amber-300'
+                      : 'text-slate-400'
+                }`}>
+                  {eraseMode === 'sector'
+                    ? 'Sector Erase'
+                    : eraseMode === 'full-chip'
+                      ? 'Full Chip Fallback'
+                      : 'Detecting...'}
+                </span>
+              </Card>
             </div>
+
+            {detectedFamily === 'at32f43x' && (
+              <Card className="space-y-3">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <div className="text-slate-300 font-medium">AT32F43x Device Profile</div>
+                    <div className="text-slate-500 text-sm">Choose the exact capacity tier before partial erase.</div>
+                  </div>
+                  <select
+                    value={selectedProfileId}
+                    onChange={(e) => setSelectedProfileId(e.target.value as DeviceProfileId | '')}
+                    disabled={status === 'working'}
+                    className="min-w-64 text-sm px-3 py-2 rounded-lg bg-slate-900 text-slate-200 border border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/40 disabled:opacity-60"
+                  >
+                    <option value="">Select profile...</option>
+                    <option value="at32f43x-xgt7">{DEVICE_PROFILES['at32f43x-xgt7'].label}</option>
+                    <option value="at32f43x-xmt7">{DEVICE_PROFILES['at32f43x-xmt7'].label}</option>
+                  </select>
+                </div>
+              </Card>
+            )}
 
             {/* Operations Area */}
             <Card className="space-y-6">
