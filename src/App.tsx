@@ -18,6 +18,8 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+const PROGRAM_ERASE_PROGRESS_MAX = 15;
+
 function App() {
   // --- State ---
   const [status, setStatus] = useState<AppStatus>('disconnected');
@@ -29,7 +31,7 @@ function App() {
   const [progress, setProgress] = useState(0);
   const [progressLabel, setProgressLabel] = useState('');
   const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [baudRate, setBaudRate] = useState(115200);
+  const [baudRate, setBaudRate] = useState(256000);
   const [eraseMode, setEraseMode] = useState<EraseMode>('unknown');
   const [detectedFamily, setDetectedFamily] = useState<'unknown' | 'at32f43x' | 'other'>('unknown');
   const [selectedProfileId, setSelectedProfileId] = useState<DeviceProfileId | ''>('');
@@ -51,7 +53,7 @@ function App() {
   const connectWithInterface = async (serial: ISerialInterface, mode: ConnectionMode) => {
     try {
       setStatus('connecting');
-      addLog(mode === 'demo' ? 'Starting Demo Mode...' : 'Requesting Serial Port...', 'info');
+      addLog(mode === 'demo' ? 'Starting Demo Mode...' : `Requesting Serial Port (${baudRate} baud)...`, 'info');
       await serial.connect({ baudRate, parity: 'even', dataBits: 8, stopBits: 1 });
       serialRef.current = serial;
       setConnectionMode(mode);
@@ -59,7 +61,7 @@ function App() {
       const protocol = new AT32Protocol(serial);
       protocolRef.current = protocol;
 
-      addLog(mode === 'demo' ? 'Demo transport ready. Syncing...' : 'Port Opened. Syncing...', 'info');
+      addLog(mode === 'demo' ? 'Demo transport ready. Syncing...' : `Port Opened at ${baudRate} baud. Syncing...`, 'info');
       await protocol.sync();
       addLog('Sync OK. Getting Device Info...', 'success');
 
@@ -203,6 +205,7 @@ function App() {
 
   const program = async () => {
     if (!protocolRef.current || !fileInfo) return;
+    let eraseProgressTimer: number | null = null;
     try {
       setStatus('working');
       setProgress(0);
@@ -213,6 +216,10 @@ function App() {
       let writtenBytes = 0;
 
       addLog(`Programming ${totalBytes} bytes in ${fileInfo.segments.length} segments...`, 'info');
+
+      eraseProgressTimer = globalThis.setInterval(() => {
+        setProgress((old) => Math.min(old + 1, PROGRAM_ERASE_PROGRESS_MAX - 1));
+      }, 250);
 
       if (detectedFamilyRef.current === 'at32f43x') {
         if (!selectedProfileId) {
@@ -226,17 +233,19 @@ function App() {
         addLog(`Erasing ${eraseSectors.length} sector(s) from file coverage before programming...`, 'info');
         setProgressLabel(`Erasing ${eraseSectors.length} sector(s)...`);
         await protocolRef.current.eraseSectors(eraseSectors);
-        setProgress(100);
       } else {
         setEraseMode('full-chip');
         setProgressLabel('Unknown device, erasing full chip...');
         addLog('Unknown or unsupported device for sector erase. Falling back to full-chip erase before programming.', 'warning');
         await protocolRef.current.eraseAll();
-        setProgress(100);
       }
 
+      if (eraseProgressTimer !== null) {
+        globalThis.clearInterval(eraseProgressTimer);
+      }
+      setProgress(PROGRAM_ERASE_PROGRESS_MAX);
+
       addLog('Erase Complete. Starting program write...', 'success');
-      setProgress(0);
       setProgressLabel('Writing to Flash...');
 
       const chunkSize = 256;
@@ -253,18 +262,23 @@ function App() {
           await protocolRef.current.writeMemory(addr, chunk);
 
           writtenBytes += chunk.length;
-          const percent = Math.round((writtenBytes / totalBytes) * 100);
+          const writeProgress = (writtenBytes / totalBytes) * (100 - PROGRAM_ERASE_PROGRESS_MAX);
+          const percent = PROGRAM_ERASE_PROGRESS_MAX + writeProgress;
 
           setProgress(percent);
           setProgressLabel(`Writing to 0x${addr.toString(16).toUpperCase()}...`);
         }
       }
 
+      setProgress(100);
       addLog('Programming Complete.', 'success');
     } catch (err: unknown) {
       addLog(`Programming Failed: ${getErrorMessage(err)}`, 'error');
       setStatus('error');
     } finally {
+      if (eraseProgressTimer !== null) {
+        globalThis.clearInterval(eraseProgressTimer);
+      }
       setStatus('connected');
     }
   };
@@ -303,7 +317,7 @@ function App() {
           }
 
           verifiedBytes += len;
-          const percent = Math.round((verifiedBytes / totalBytes) * 100);
+          const percent = (verifiedBytes / totalBytes) * 100;
 
           setProgress(percent);
           setProgressLabel(`Verifying 0x${addr.toString(16).toUpperCase()}...`);

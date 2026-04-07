@@ -23,16 +23,18 @@ export class WebSerialInterface implements ISerialInterface {
   private writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
   public status: ConnectionStatus = 'disconnected';
   private buffer: number[] = [];
+  private readWaiters: Array<() => void> = [];
 
   // Keep reading in background to fill buffer
   private readingPromise: Promise<void> | null = null;
   private keepReading = false;
 
-  async connect(options: SerialOptions = { baudRate: 115200, parity: 'even', dataBits: 8, stopBits: 1 }): Promise<void> {
+  async connect(options: SerialOptions = { baudRate: 256000, parity: 'even', dataBits: 8, stopBits: 1 }): Promise<void> {
     try {
       this.status = 'connecting';
       this.port = await navigator.serial.requestPort();
       await this.port.open(options);
+      this.writer = this.port.writable?.getWriter() ?? null;
 
       this.keepReading = true;
       this.readingPromise = this.readLoop();
@@ -47,6 +49,7 @@ export class WebSerialInterface implements ISerialInterface {
 
   async disconnect(): Promise<void> {
     this.keepReading = false;
+    this.notifyReadWaiters();
     if (this.reader) {
       await this.reader.cancel();
     }
@@ -66,15 +69,9 @@ export class WebSerialInterface implements ISerialInterface {
 
 
   async write(data: Uint8Array): Promise<void> {
-    if (!this.port || !this.port.writable) throw new Error('Port not open');
-
-    if (!this.writer) {
-      this.writer = this.port.writable.getWriter();
-    }
+    if (!this.port || !this.writer) throw new Error('Port not open');
 
     await this.writer.write(data);
-    this.writer.releaseLock();
-    this.writer = null;
   }
 
   // Read exact number of bytes with timeout
@@ -83,10 +80,11 @@ export class WebSerialInterface implements ISerialInterface {
 
     while (this.buffer.length < count) {
       if (!this.keepReading) throw new Error('Port disconnected during read');
-      if (Date.now() - startTime > timeoutMs) {
+      const remainingMs = timeoutMs - (Date.now() - startTime);
+      if (remainingMs <= 0) {
         throw new Error(`Timeout reading ${count} bytes. Got ${this.buffer.length}.`);
       }
-      await new Promise(r => setTimeout(r, 10)); // Sleep 10ms
+      await this.waitForData(remainingMs);
     }
 
     const result = new Uint8Array(this.buffer.slice(0, count));
@@ -110,6 +108,7 @@ export class WebSerialInterface implements ISerialInterface {
           for (let i = 0; i < value.length; i++) {
             this.buffer.push(value[i]);
           }
+          this.notifyReadWaiters();
         }
       }
     } catch (e) {
@@ -119,6 +118,35 @@ export class WebSerialInterface implements ISerialInterface {
         this.reader.releaseLock();
         this.reader = null;
       }
+    }
+  }
+
+  private waitForData(timeoutMs: number): Promise<void> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const timeoutId = globalThis.setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        this.readWaiters = this.readWaiters.filter(waiter => waiter !== onData);
+        resolve();
+      }, timeoutMs);
+
+      const onData = () => {
+        if (settled) return;
+        settled = true;
+        globalThis.clearTimeout(timeoutId);
+        resolve();
+      };
+
+      this.readWaiters.push(onData);
+    });
+  }
+
+  private notifyReadWaiters() {
+    const waiters = this.readWaiters;
+    this.readWaiters = [];
+    for (const waiter of waiters) {
+      waiter();
     }
   }
 }

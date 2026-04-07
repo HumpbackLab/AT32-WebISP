@@ -43,7 +43,7 @@ export function ProgressBar({ progress, label, status }: { progress: number, lab
             </div>
             <div className="h-2 bg-slate-800 rounded-full overflow-hidden border border-slate-700/50">
                 <div
-                    className="h-full bg-gradient-to-r from-blue-500 to-cyan-400 transition-all duration-300 ease-out shadow-[0_0_10px_rgba(59,130,246,0.5)]"
+                    className="h-full bg-gradient-to-r from-blue-500 to-cyan-400 transition-[width] duration-75 ease-out shadow-[0_0_10px_rgba(59,130,246,0.5)]"
                     style={{ width: `${progress}%` }}
                 />
             </div>

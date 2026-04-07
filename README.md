@@ -59,7 +59,7 @@ npm run build
 1. **Connect Device**
    - Click "Connect Device" button
    - Select the correct serial port from the browser dialog
-   - Default baud rate: 115200 (configurable)
+   - Default baud rate: 256000 (configurable, per protocol max)
 
 2. **Load Firmware**
    - Click "Select Firmware" and choose your file
