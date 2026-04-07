@@ -1,189 +1,176 @@
 # AT32 ISP Web UI
 
-A browser-based firmware programming utility for AT32 microcontrollers using Web Serial API.
+[English README](./README.en.md)
+
+基于浏览器的 AT32 微控制器固件烧写工具，使用 Web Serial API 通过串口与芯片 Bootloader 通信。
 
 [![Build and Release](https://github.com/HumpbackLab/AT32-WebISP/actions/workflows/release.yml/badge.svg)](https://github.com/HumpbackLab/AT32-WebISP/actions/workflows/release.yml)
 
-## Features
+## 功能特性
 
-- 🌐 **Browser-Based** - No installation required, runs entirely in your browser
-- 📦 **Single File Distribution** - Built as a standalone HTML file for easy sharing
-- 🔌 **Web Serial API** - Direct USB-TTL communication without drivers
-- 📁 **Multiple Format Support** - Supports `.bin`, `.hex`, and `.elf` firmware files
-- ⚡ **Full Bootloader Control** - Erase, program, and verify flash memory
-- 🎨 **Modern UI** - Clean, responsive interface built with React and Tailwind CSS
+- 浏览器内运行，无需安装桌面工具
+- 单文件发布，构建后可直接分发 `index.html`
+- 基于 Web Serial API 与 USB-TTL 直接通信
+- 支持 `.bin`、`.hex`、`.elf` 固件格式
+- 支持擦除、烧写、校验等基础 Bootloader 操作
+- 使用 React 和 Tailwind CSS 构建界面
 
-## Quick Start
+## 快速开始
 
-### Option 1: Use Online Version (Recommended)
+### 方式 1：直接使用在线版本
 
-Visit **[https://humpbacklab.github.io/AT32-WebISP/](https://HumpbackLab.github.io/AT32-WebISP/)** to use the app directly in your browser - no download required!
+访问 [https://humpbacklab.github.io/AT32-WebISP/](https://HumpbackLab.github.io/AT32-WebISP/) 即可使用，无需下载。
 
-### Option 2: Download Pre-built Release
+### 方式 2：下载构建产物
 
-1. Download the latest `index.html` from [Releases](https://github.com/HumpbackLab/AT32-WebISP/releases)
-2. Open the file in a modern browser (Chrome or Edge recommended)
-3. Connect your AT32 device and start programming
+1. 从 [Releases](https://github.com/HumpbackLab/AT32-WebISP/releases) 下载最新的 `index.html`
+2. 用现代浏览器打开，推荐 Chrome 或 Edge
+3. 连接设备后开始烧写
 
-### Option 3: Build from Source
+### 方式 3：从源码构建
 
 ```bash
-# Clone the repository
 git clone https://github.com/HumpbackLab/AT32-WebISP.git
 cd AT32-WebISP
-
-# Install dependencies
 npm install
-
-# Build single-file HTML
 npm run build
-
-# Output will be in dist/index.html
 ```
 
-## Usage
+构建产物位于 `dist/index.html`。
 
-### Hardware Setup
+## 使用方法
 
-1. **Enter Bootloader Mode**
-   - Connect BOOT0 pin to HIGH (3.3V)
-   - Reset the microcontroller
-   - The device will enter bootloader mode
+### 硬件准备
 
-2. **USB-TTL Connection**
-   - Connect USB-TTL adapter to your AT32's UART pins
-   - Common configurations: UART1 (PA9/PA10) or UART3
+1. 进入 Bootloader 模式
+   - 将 `BOOT0` 拉高到 `3.3V`
+   - 复位单片机
+   - 芯片将进入内置 Bootloader
 
-### Programming Steps
+2. 连接 USB-TTL
+   - 将 USB-TTL 适配器连接到 AT32 的 UART 引脚
+   - 常见串口为 `UART1 (PA9/PA10)` 或 `UART3`
 
-1. **Connect Device**
-   - Click "Connect Device" button
-   - Select the correct serial port from the browser dialog
-   - Default baud rate: 256000 (configurable, per protocol max)
+### 烧写流程
 
-2. **Load Firmware**
-   - Click "Select Firmware" and choose your file
-   - Supported formats: `.bin`, `.hex`, `.elf`
+1. 连接设备
+   - 点击 `Connect Device`
+   - 在浏览器弹窗中选择正确串口
+   - 默认波特率为 `256000`，可按需要手动调整
 
-3. **Program Flash**
-   - **Full Chip Erase**: Erase entire flash memory
-   - **Write to Flash**: Program the selected firmware
-   - **Verify Flash**: Verify written data matches firmware file
+2. 选择固件
+   - 点击 `Select Firmware`
+   - 选择 `.bin`、`.hex` 或 `.elf` 文件
 
-## Supported Formats
+3. 执行操作
+   - `Full Chip Erase`：整片擦除
+   - `Write to Flash`：写入固件
+   - `Verify Flash`：回读并校验写入结果
 
-| Format | Description | Base Address |
-|--------|-------------|--------------|
-| `.bin` | Raw binary | 0x08000000 (default) |
-| `.hex` | Intel HEX | Extracted from file |
-| `.elf` | ELF executable | Extracted from loadable segments |
+## 支持的文件格式
 
-## AT32 Bootloader Protocol
+| 格式 | 说明 | 基地址 |
+|------|------|--------|
+| `.bin` | 原始二进制 | `0x08000000`（默认） |
+| `.hex` | Intel HEX | 从文件内容解析 |
+| `.elf` | ELF 可执行文件 | 从可加载段解析 |
 
-This tool implements the AT32 UART bootloader protocol with the following commands:
+## 已实现的 Bootloader 命令
 
 - `0x00` - Get Commands
 - `0x01` - Get Version
 - `0x02` - Get ID
 - `0x11` - Read Memory
-- `0x21` - Go (Execute)
+- `0x21` - Go
 - `0x31` - Write Memory
 - `0x44` - Extended Erase
 - `0xAC` - Firmware CRC
 
-## Browser Compatibility
+## 浏览器兼容性
 
-Requires a browser with Web Serial API support:
+需要浏览器支持 Web Serial API：
 
-- ✅ Chrome 89+
-- ✅ Edge 89+
-- ✅ Opera 75+
-- ❌ Firefox (not supported)
-- ❌ Safari (not supported)
+- Chrome 89+
+- Edge 89+
+- Opera 75+
+- Firefox：不支持
+- Safari：不支持
 
-**Note**: HTTPS or localhost is required for Web Serial API access.
+注意：Web Serial API 需要在 `HTTPS` 或 `localhost` 下使用。
 
-## Development
+## 开发
 
 ```bash
-# Development server with hot reload
+# 本地开发
 npm run dev
 
-# Type checking
+# 代码检查
 npm run lint
 
-# Build for production
+# 生产构建
 npm run build
 ```
 
-### Project Structure
+## 项目结构
 
-```
+```text
 AT32-WebISP/
 ├── src/
-│   ├── App.tsx              # Main application component
-│   ├── main.tsx             # Application entry point
-│   ├── components/          # UI components
-│   │   ├── Common.tsx       # Reusable UI elements
-│   │   └── LogViewer.tsx    # System log viewer
-│   ├── drivers/             # Protocol implementation
-│   │   ├── AT32Protocol.ts  # AT32 bootloader protocol
-│   │   └── SerialInterface.ts # Web Serial API wrapper
+│   ├── App.tsx
+│   ├── main.tsx
+│   ├── components/
+│   │   ├── Common.tsx
+│   │   └── LogViewer.tsx
+│   ├── drivers/
+│   │   ├── AT32Protocol.ts
+│   │   └── SerialInterface.ts
 │   └── utils/
-│       └── FileParsers.ts   # Firmware format parsers
+│       └── FileParsers.ts
 ├── .github/
 │   └── workflows/
-│       └── release.yml      # CI/CD workflow
-└── vite.config.ts           # Build configuration
+│       └── release.yml
+└── vite.config.ts
 ```
 
 ## CI/CD
 
-This project includes automated GitHub Actions workflow:
+项目包含 GitHub Actions 工作流：
 
-- **Trigger**: Push to `main` branch
-- **Actions**:
-  1. Build project as single HTML file
-  2. Generate timestamped version tag
-  3. Create GitHub Release with built file
+- 触发条件：推送到 `main`
+- 执行动作：
+  1. 构建单文件 HTML
+  2. 生成时间戳版本标签
+  3. 创建 GitHub Release 并上传产物
 
-## Contributing
+## 故障排查
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+### 浏览器提示找不到兼容设备
 
-## License
+- 确认复位前 `BOOT0` 已拉高
+- 检查 UART 引脚连接
+- 确认波特率设置正确
 
-MIT License - feel free to use this project for any purpose.
+### 读取响应超时
 
-## Acknowledgments
+- 让 MCU 重新进入 Bootloader 模式后再连接
+- 确认串口接线正确，优先检查 `UART1` 或 `UART3`
+- 尝试降低波特率
 
-- Built with [React](https://react.dev/) and [Vite](https://vitejs.dev/)
-- UI styled with [Tailwind CSS](https://tailwindcss.com/)
-- Icons from [Lucide React](https://lucide.dev/)
-- Single-file build powered by [vite-plugin-singlefile](https://github.com/richardtallent/vite-plugin-singlefile)
+### 浏览器提示无权限
 
-## Troubleshooting
+- 使用 Chrome 或 Edge
+- 通过 `HTTPS` 或 `localhost` 访问页面
+- 在浏览器弹窗中授予串口访问权限
 
-### "No compatible device found"
-- Ensure BOOT0 is HIGH before resetting
-- Check UART pin connections
-- Verify baud rate matches bootloader configuration
+## 相关项目
 
-### "Timeout reading response"
-- Reset the MCU and try reconnecting
-- Confirm correct UART pins (usually UART1 or UART3)
-- Try a different baud rate
+- [AT32 Official Tools](https://www.arterytek.com/)：ArteryTek 官方工具
+- [stm32flash](https://sourceforge.net/projects/stm32flash/)：类似的 STM32 串口烧写工具
 
-### "Permission denied" in browser
-- Use Chrome or Edge browser
-- Access via HTTPS or localhost
-- Grant serial port permissions when prompted
+## 贡献
 
-## Related Projects
+欢迎提交 Issue 和 Pull Request。
 
-- [AT32 Official Tools](https://www.arterytek.com/) - Official ArteryTek programming tools
-- [stm32flash](https://sourceforge.net/projects/stm32flash/) - Similar tool for STM32 via UART
+## 许可证
 
----
-
-**Made with ❤️ for the embedded development community**
+MIT
