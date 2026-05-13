@@ -156,6 +156,7 @@ export class MockSerialInterface implements ISerialInterface {
   private buffer: number[] = [];
   private pendingCommand: number | null = null;
   private pendingAddress: number | null = null;
+  private pendingSetISP = false;
   private readonly flashBase = 0x08000000;
   private readonly flashSize = 1024 * 1024;
   private readonly sectorSize = 2 * 1024;
@@ -202,6 +203,11 @@ export class MockSerialInterface implements ISerialInterface {
   private processCommand(data: Uint8Array) {
     if (data.length === 0) return;
 
+    if (this.pendingSetISP) {
+      this.processSetISPFrame(data);
+      return;
+    }
+
     if (this.pendingCommand !== null) {
       this.processPendingFrame(data);
       return;
@@ -220,6 +226,9 @@ export class MockSerialInterface implements ISerialInterface {
       this.push([0x79]);
 
       switch (cmd) {
+        case 0xFA: // Set ISP
+          this.pendingSetISP = true;
+          return;
         case 0x01: // Get Version
           setTimeout(() => this.push([0x20, 0x00, 0x00, 0x79]), 20);
           return;
@@ -250,6 +259,25 @@ export class MockSerialInterface implements ISerialInterface {
           return;
       }
     }
+  }
+
+  private processSetISPFrame(data: Uint8Array) {
+    this.pendingSetISP = false;
+
+    if (data.length !== 5) {
+      throw new Error('Mock SetISP frame length mismatch');
+    }
+
+    let checksum = 0;
+    for (let i = 0; i < 4; i++) {
+      checksum ^= data[i];
+    }
+
+    if (checksum !== data[4]) {
+      throw new Error('Mock SetISP checksum mismatch');
+    }
+
+    this.push([0x79]);
   }
 
   private processPendingFrame(data: Uint8Array) {

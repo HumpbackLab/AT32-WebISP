@@ -98,7 +98,15 @@ function App() {
 
       addLog(mode === 'demo' ? 'Demo transport ready. Syncing...' : `Port Opened at ${baudRate} baud. Syncing...`, 'info');
       await protocol.sync();
-      addLog('Sync OK. Getting Device Info...', 'success');
+      addLog('Sync OK. Initializing bootloader...', 'success');
+
+      const setISPAccepted = await protocol.setISP();
+      addLog(setISPAccepted
+        ? 'Set ISP accepted by target.'
+        : 'Set ISP not required on this target.',
+      'info');
+
+      addLog('Reading Device Info...', 'info');
 
       const id = await protocol.getID();
       const ver = await protocol.getVersion();
