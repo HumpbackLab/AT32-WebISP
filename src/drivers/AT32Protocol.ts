@@ -15,6 +15,7 @@ export const CMD = {
 
 export const ACK = 0x79;
 export const NACK = 0x1F;
+const ERASE_ACK_TIMEOUT_MS = 60000;
 const SET_ISP_PAYLOAD = new Uint8Array([0x02, 0x03, 0x54, 0x41]);
 
 export class AT32Protocol {
@@ -207,7 +208,7 @@ export class AT32Protocol {
 
         await this.serial.write(new Uint8Array([code1, code2, checksum]));
 
-        const ack = await this.serial.read(1, 10000); // Erase takes time
+        const ack = await this.serial.read(1, ERASE_ACK_TIMEOUT_MS); // Erase takes time
         if (ack[0] !== ACK) throw new Error('Erase All failed');
     }
 
@@ -247,7 +248,7 @@ export class AT32Protocol {
 
         await this.serial.write(frame);
 
-        const ack = await this.serial.read(1, 10000);
+        const ack = await this.serial.read(1, ERASE_ACK_TIMEOUT_MS);
         if (ack[0] !== ACK) {
             throw new Error('Sector erase failed');
         }
@@ -271,7 +272,7 @@ export class AT32Protocol {
             b3, b2, b1, b0, addressChecksum
         ]));
 
-        const ack = await this.serial.read(1, 10000);
+        const ack = await this.serial.read(1, ERASE_ACK_TIMEOUT_MS);
         if (ack[0] !== ACK) {
             throw new Error(`Block erase failed at 0x${address.toString(16).toUpperCase()}`);
         }
