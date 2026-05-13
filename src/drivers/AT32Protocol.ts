@@ -1,6 +1,7 @@
 import type { ISerialInterface } from './SerialInterface';
 
 export const CMD = {
+    SET_ISP: 0xFA,
     GET_COMMANDS: 0x00,
     GET_VERSION: 0x01,
     GET_ID: 0x02,
@@ -14,6 +15,7 @@ export const CMD = {
 
 export const ACK = 0x79;
 export const NACK = 0x1F;
+const SET_ISP_PAYLOAD = new Uint8Array([0x02, 0x03, 0x54, 0x41]);
 
 export class AT32Protocol {
     private serial: ISerialInterface;
@@ -38,6 +40,36 @@ export class AT32Protocol {
             if (resp[0] === NACK) throw new Error('Received NACK during sync');
             throw new Error(`Sync failed. Expected 0x79, got 0x${resp[0].toString(16)}`);
         }
+    }
+
+    async setISP(): Promise<boolean> {
+        const frame = new Uint8Array([CMD.SET_ISP, CMD.SET_ISP ^ 0xFF]);
+        await this.serial.write(frame);
+
+        const resp = await this.serial.read(1, 500);
+        if (resp[0] === NACK) {
+            return false;
+        }
+        if (resp[0] !== ACK) {
+            throw new Error(`Set ISP failed. Got 0x${resp[0].toString(16)}`);
+        }
+
+        let checksum = 0;
+        for (const value of SET_ISP_PAYLOAD) {
+            checksum ^= value;
+        }
+
+        const payload = new Uint8Array(SET_ISP_PAYLOAD.length + 1);
+        payload.set(SET_ISP_PAYLOAD, 0);
+        payload[payload.length - 1] = checksum;
+
+        await this.serial.write(payload);
+        const ack = await this.serial.read(1, 500);
+        if (ack[0] !== ACK) {
+            throw new Error('Set ISP payload was not acknowledged');
+        }
+
+        return true;
     }
 
     /**
