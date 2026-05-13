@@ -6,7 +6,7 @@ import { DEVICE_PROFILES, getSectorsForSegments, type DeviceProfileId } from './
 import { Card, Button, ProgressBar } from './components/Common'
 import { LogViewer } from './components/LogViewer'
 import { FileParsers, type FirmwareSegment } from './utils/FileParsers'
-import { Cpu, Zap, RotateCcw, FileCode, Play, AlertCircle, CheckCircle, MonitorPlay } from 'lucide-react'
+import { Cpu, Zap, RotateCcw, FileCode, Play, AlertCircle, CheckCircle, MonitorPlay, Download } from 'lucide-react'
 
 // --- Types ---
 type AppStatus = 'disconnected' | 'connecting' | 'connected' | 'working' | 'error';
@@ -19,6 +19,9 @@ function getErrorMessage(error: unknown): string {
 }
 
 const PROGRAM_ERASE_PROGRESS_MAX = 15;
+const FLASH_BASE = 0x08000000;
+const DEFAULT_DUMP_SIZE = 1024 * 1024;
+const DUMP_CHUNK_SIZE = 256;
 
 function App() {
   // --- State ---
@@ -47,6 +50,38 @@ function App() {
   const addLog = (msg: string, type: LogEntry['type'] = 'info') => {
     const time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
     setLogs(prev => [...prev.slice(-100), { id: Date.now(), time, message: msg, type }]);
+  };
+
+  const getDumpConfig = () => {
+    if (detectedFamilyRef.current === 'at32f43x') {
+      if (!selectedProfileId) {
+        throw new Error('Select the exact AT32F43x device profile before dumping flash.');
+      }
+
+      const profile = DEVICE_PROFILES[selectedProfileId];
+      return {
+        baseAddress: profile.flashBase,
+        flashSize: profile.flashSize,
+        label: profile.label
+      };
+    }
+
+    return {
+      baseAddress: FLASH_BASE,
+      flashSize: DEFAULT_DUMP_SIZE,
+      label: 'Generic AT32 (1MB fallback)'
+    };
+  };
+
+  const triggerDownload = (data: Uint8Array, filename: string) => {
+    const arrayBuffer = new Uint8Array(data).buffer;
+    const blob = new Blob([arrayBuffer], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    URL.revokeObjectURL(url);
   };
 
   // --- Actions ---
@@ -332,6 +367,43 @@ function App() {
       setStatus('connected');
     }
   };
+
+  const dumpFlash = async () => {
+    if (!protocolRef.current || !deviceInfo) return;
+    try {
+      setStatus('working');
+      setProgress(0);
+      setProgressLabel('Preparing flash dump...');
+
+      const { baseAddress, flashSize, label } = getDumpConfig();
+      const totalChunks = Math.ceil(flashSize / DUMP_CHUNK_SIZE);
+      const dumpData = new Uint8Array(flashSize);
+
+      addLog(`Dumping ${flashSize} bytes from 0x${baseAddress.toString(16).toUpperCase()} using ${label}...`, 'info');
+
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * DUMP_CHUNK_SIZE;
+        const length = Math.min(DUMP_CHUNK_SIZE, flashSize - start);
+        const address = baseAddress + start;
+        const chunk = await protocolRef.current.readMemory(address, length);
+        dumpData.set(chunk, start);
+
+        const percent = ((start + length) / flashSize) * 100;
+        setProgress(percent);
+        setProgressLabel(`Reading 0x${address.toString(16).toUpperCase()}...`);
+      }
+
+      const filename = `at32_flash_0x${deviceInfo.pid.toString(16).toUpperCase()}_${flashSize / 1024}KB.bin`;
+      triggerDownload(dumpData, filename);
+      setProgress(100);
+      addLog(`Flash dump complete: ${filename}`, 'success');
+    } catch (err: unknown) {
+      addLog(`Dump Flash Failed: ${getErrorMessage(err)}`, 'error');
+      setStatus('error');
+    } finally {
+      setStatus('connected');
+    }
+  };
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
       <div className="w-full max-w-5xl space-y-6">
@@ -519,7 +591,7 @@ function App() {
               <div className="h-px bg-slate-800/50" />
 
               {/* Actions */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
                 <Button
                   onClick={erase}
                   variant="danger"
@@ -543,6 +615,14 @@ function App() {
                   icon={<CheckCircle className="w-4 h-4" />}
                 >
                   Verify Flash
+                </Button>
+                <Button
+                  onClick={dumpFlash}
+                  variant="secondary"
+                  disabled={status === 'working' || (detectedFamily === 'at32f43x' && !selectedProfileId)}
+                  icon={<Download className="w-4 h-4" />}
+                >
+                  Dump Flash
                 </Button>
               </div>
 
