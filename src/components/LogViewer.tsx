@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useI18n } from '../i18n';
 
 interface LogEntry {
     id: number;
@@ -8,6 +9,7 @@ interface LogEntry {
 }
 
 export function LogViewer({ logs }: { logs: LogEntry[] }) {
+    const { t } = useI18n();
     const bottomRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -23,7 +25,7 @@ export function LogViewer({ logs }: { logs: LogEntry[] }) {
 
     return (
         <div className="w-full h-48 bg-slate-950/50 rounded-lg border border-slate-800/50 p-3 overflow-y-auto font-mono text-xs">
-            {logs.length === 0 && <div className="text-slate-600 text-center mt-10">System Ready. Waiting for interactions...</div>}
+            {logs.length === 0 && <div className="text-slate-600 text-center mt-10">{t('systemReady')}</div>}
             {logs.map((log) => (
                 <div key={log.id} className={`mb-1 ${typeColors[log.type]}`}>
                     <span className="opacity-50 mr-2">[{log.time}]</span>

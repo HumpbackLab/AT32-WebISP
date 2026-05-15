@@ -6,7 +6,8 @@ import { DEVICE_PROFILES, getSectorsForSegments, type DeviceProfileId } from './
 import { Card, Button, ProgressBar } from './components/Common'
 import { LogViewer } from './components/LogViewer'
 import { FileParsers, type FirmwareSegment } from './utils/FileParsers'
-import { Cpu, Zap, RotateCcw, FileCode, Play, AlertCircle, CheckCircle, MonitorPlay, Download } from 'lucide-react'
+import { Cpu, Zap, RotateCcw, FileCode, Play, AlertCircle, CheckCircle, MonitorPlay, Download, Languages } from 'lucide-react'
+import { useI18n } from './i18n'
 
 // --- Types ---
 type AppStatus = 'disconnected' | 'connecting' | 'connected' | 'working' | 'error';
@@ -40,6 +41,9 @@ function App() {
   const [selectedProfileId, setSelectedProfileId] = useState<DeviceProfileId | ''>('');
   const [connectionMode, setConnectionMode] = useState<ConnectionMode>(null);
 
+  // --- I18n ---
+  const { t, lang, setLang } = useI18n();
+
   // --- Refs ---
   const serialRef = useRef<ISerialInterface | null>(null);
   const protocolRef = useRef<AT32Protocol | null>(null);
@@ -55,7 +59,7 @@ function App() {
   const getDumpConfig = () => {
     if (detectedFamilyRef.current === 'at32f43x') {
       if (!selectedProfileId) {
-        throw new Error('Select the exact AT32F43x device profile before dumping flash.');
+        throw new Error(t('log.selectProfileForDump'));
       }
 
       const profile = DEVICE_PROFILES[selectedProfileId];
@@ -88,7 +92,7 @@ function App() {
   const connectWithInterface = async (serial: ISerialInterface, mode: ConnectionMode) => {
     try {
       setStatus('connecting');
-      addLog(mode === 'demo' ? 'Starting Demo Mode...' : `Requesting Serial Port (${baudRate} baud)...`, 'info');
+      addLog(mode === 'demo' ? t('log.startingDemo') : t('log.requestingPort', { baud: baudRate }), 'info');
       await serial.connect({ baudRate, parity: 'even', dataBits: 8, stopBits: 1 });
       serialRef.current = serial;
       setConnectionMode(mode);
@@ -96,24 +100,21 @@ function App() {
       const protocol = new AT32Protocol(serial);
       protocolRef.current = protocol;
 
-      addLog(mode === 'demo' ? 'Demo transport ready. Syncing...' : `Port Opened at ${baudRate} baud. Syncing...`, 'info');
+      addLog(mode === 'demo' ? t('log.demoTransportReady') : t('log.portOpened', { baud: baudRate }), 'info');
       await protocol.sync();
-      addLog('Sync OK. Initializing bootloader...', 'success');
+      addLog(t('log.syncOk'), 'success');
 
       const setISPAccepted = await protocol.setISP();
-      addLog(setISPAccepted
-        ? 'Set ISP accepted by target.'
-        : 'Set ISP not required on this target.',
-      'info');
+      addLog(setISPAccepted ? t('log.setISPAccepted') : t('log.setISPNotRequired'), 'info');
 
-      addLog('Reading Device Info...', 'info');
+      addLog(t('log.readingDeviceInfo'), 'info');
 
       const id = await protocol.getID();
       const ver = await protocol.getVersion();
 
       setDeviceInfo({ ...id, version: ver.version });
       setStatus('connected');
-      addLog(`Connected: PID 0x${id.pid.toString(16).toUpperCase()} (Ver ${ver.version})`, 'success');
+      addLog(t('log.connectedPid', { pid: id.pid.toString(16).toUpperCase(), version: ver.version }), 'success');
 
       try {
         const isF435437Family = await protocol.detectF435437Family();
@@ -126,28 +127,26 @@ function App() {
           if (mode === 'demo') {
             setSelectedProfileId('at32f43x-xgt7');
           }
-          addLog('Detected AT32F435/F437-compatible bootloader.', 'info');
-          addLog(mode === 'demo'
-            ? 'Demo Mode defaulted to the AT32F43x xGT7 device profile.'
-            : 'Select the exact AT32F43x capacity tier before partial sector erase.', 'warning');
+          addLog(t('log.detectedF43x'), 'info');
+          addLog(mode === 'demo' ? t('log.demoDefaulted') : t('log.selectExactDevice'), 'warning');
         } else {
-          addLog('Unknown or non-F435/F437 device. Programming will fall back to full-chip erase.', 'warning');
+          addLog(t('log.unknownDevice'), 'warning');
         }
       } catch (err: unknown) {
         detectedFamilyRef.current = 'other';
         setDetectedFamily('other');
         setEraseMode('full-chip');
-        addLog(`Could not determine AT32F43x family support: ${getErrorMessage(err)}`, 'warning');
-        addLog('Programming will fall back to full-chip erase for safety.', 'warning');
+        addLog(t('log.couldNotDetectFamily', { error: getErrorMessage(err) }), 'warning');
+        addLog(t('log.fallbackFullChip'), 'warning');
       }
 
     } catch (err: unknown) {
       console.error(err);
       setStatus('error');
       const message = getErrorMessage(err);
-      addLog(`Connection Failed: ${message}`, 'error');
+      addLog(t('log.connectionFailed', { error: message }), 'error');
       if (message.includes('Timeout reading')) {
-        addLog('Please reset the MCU, switch to Bootloader mode again, and reconnect.', 'warning');
+        addLog(t('log.resetMcu'), 'warning');
       }
       if (serialRef.current) {
         await serialRef.current.disconnect();
@@ -180,7 +179,7 @@ function App() {
       setConnectionMode(null);
       setStatus('disconnected');
       setDeviceInfo(null);
-      addLog('Disconnected.', 'warning');
+      addLog(t('log.disconnected'), 'warning');
     }
   };
 
@@ -195,18 +194,18 @@ function App() {
       if (f.name.toLowerCase().endsWith('.hex')) {
         const text = new TextDecoder().decode(buf);
         segments = FileParsers.parseHex(text);
-        addLog(`Parsed HEX file. Found ${segments.length} segments.`, 'info');
+        addLog(t('log.parsedHex', { count: segments.length }), 'info');
       } else if (f.name.toLowerCase().endsWith('.elf')) {
         segments = FileParsers.parseElf(buf);
-        addLog(`Parsed ELF file. Found ${segments.length} loadable segments.`, 'info');
+        addLog(t('log.parsedElf', { count: segments.length }), 'info');
       } else {
         // Default to .bin
         segments = FileParsers.parseBin(buf);
-        addLog(`Parsed Binary file. (Base: 0x08000000)`, 'info');
+        addLog(t('log.parsedBin'), 'info');
       }
 
       if (segments.length === 0) {
-        throw new Error("No loadable data found in file.");
+        throw new Error(t('log.noLoadableData'));
       }
 
       setFileInfo({
@@ -216,7 +215,7 @@ function App() {
       });
 
     } catch (err: unknown) {
-      addLog(`Failed to load file: ${getErrorMessage(err)}`, 'error');
+      addLog(t('log.failedToLoad', { error: getErrorMessage(err) }), 'error');
     }
   };
 
@@ -226,8 +225,8 @@ function App() {
     try {
       setStatus('working');
       setProgress(0);
-      setProgressLabel('Erasing Chip...');
-      addLog('Starting Full Erase...', 'info');
+      setProgressLabel(t('log.erasingChip'));
+      addLog(t('log.eraseStart'), 'info');
 
       // Simulate progress for Erase since it's one blocking command
       const interval = setInterval(() => {
@@ -238,9 +237,9 @@ function App() {
 
       clearInterval(interval);
       setProgress(100);
-      addLog('Erase Complete', 'success');
+      addLog(t('log.eraseComplete'), 'success');
     } catch (err: unknown) {
-      addLog(`Erase Failed: ${getErrorMessage(err)}`, 'error');
+      addLog(t('log.eraseFailed', { error: getErrorMessage(err) }), 'error');
     } finally {
       setStatus('connected');
     }
@@ -252,13 +251,13 @@ function App() {
     try {
       setStatus('working');
       setProgress(0);
-      setProgressLabel('Preparing erase plan...');
+      setProgressLabel(t('log.preparingErase'));
 
       // Calculate total bytes for progress
       const totalBytes = fileInfo.segments.reduce((acc, seg) => acc + seg.data.length, 0);
       let writtenBytes = 0;
 
-      addLog(`Programming ${totalBytes} bytes in ${fileInfo.segments.length} segments...`, 'info');
+      addLog(t('log.programming', { bytes: totalBytes, count: fileInfo.segments.length }), 'info');
 
       eraseProgressTimer = globalThis.setInterval(() => {
         setProgress((old) => Math.min(old + 1, PROGRAM_ERASE_PROGRESS_MAX - 1));
@@ -266,20 +265,20 @@ function App() {
 
       if (detectedFamilyRef.current === 'at32f43x') {
         if (!selectedProfileId) {
-          throw new Error('Select the exact AT32F43x device profile before programming.');
+          throw new Error(t('log.selectProfileForProgram'));
         }
 
         const profile = DEVICE_PROFILES[selectedProfileId];
         const eraseSectors = getSectorsForSegments(profile, fileInfo.segments);
         setEraseMode('sector');
-        addLog(`Using ${profile.label} sector layout for partial erase.`, 'info');
-        addLog(`Erasing ${eraseSectors.length} sector(s) from file coverage before programming...`, 'info');
-        setProgressLabel(`Erasing ${eraseSectors.length} sector(s)...`);
+        addLog(t('log.usingProfile', { profile: profile.label }), 'info');
+        addLog(t('log.erasingSectors', { count: eraseSectors.length }), 'info');
+        setProgressLabel(t('log.erasingSectorsProgress', { count: eraseSectors.length }));
         await protocolRef.current.eraseSectors(eraseSectors);
       } else {
         setEraseMode('full-chip');
-        setProgressLabel('Unknown device, erasing full chip...');
-        addLog('Unknown or unsupported device for sector erase. Falling back to full-chip erase before programming.', 'warning');
+        setProgressLabel(t('log.erasingChip'));
+        addLog(t('log.unknownDeviceErase'), 'warning');
         await protocolRef.current.eraseAll();
       }
 
@@ -288,8 +287,8 @@ function App() {
       }
       setProgress(PROGRAM_ERASE_PROGRESS_MAX);
 
-      addLog('Erase Complete. Starting program write...', 'success');
-      setProgressLabel('Writing to Flash...');
+      addLog(t('log.eraseCompleteWrite'), 'success');
+      setProgressLabel(t('log.writingToFlash'));
 
       const chunkSize = 256;
 
@@ -309,14 +308,14 @@ function App() {
           const percent = PROGRAM_ERASE_PROGRESS_MAX + writeProgress;
 
           setProgress(percent);
-          setProgressLabel(`Writing to 0x${addr.toString(16).toUpperCase()}...`);
+          setProgressLabel(t('log.writingToAddr', { addr: addr.toString(16).toUpperCase() }));
         }
       }
 
       setProgress(100);
-      addLog('Programming Complete.', 'success');
+      addLog(t('log.programmingComplete'), 'success');
     } catch (err: unknown) {
-      addLog(`Programming Failed: ${getErrorMessage(err)}`, 'error');
+      addLog(t('log.programmingFailed', { error: getErrorMessage(err) }), 'error');
       setStatus('error');
     } finally {
       if (eraseProgressTimer !== null) {
@@ -331,12 +330,12 @@ function App() {
     try {
       setStatus('working');
       setProgress(0);
-      setProgressLabel('Verifying Flash...');
+      setProgressLabel(t('log.verifyingFlash'));
 
       const totalBytes = fileInfo.segments.reduce((acc, seg) => acc + seg.data.length, 0);
       let verifiedBytes = 0;
 
-      addLog(`Verifying ${totalBytes} bytes in ${fileInfo.segments.length} segments...`, 'info');
+      addLog(t('log.verifying', { bytes: totalBytes, count: fileInfo.segments.length }), 'info');
 
       const chunkSize = 256;
 
@@ -355,7 +354,11 @@ function App() {
             const actual = readBack[j];
             if (expected !== actual) {
               const failAddr = addr + j;
-              throw new Error(`Verify mismatch at 0x${failAddr.toString(16).toUpperCase()}: expected 0x${expected.toString(16).padStart(2, '0').toUpperCase()}, got 0x${actual.toString(16).padStart(2, '0').toUpperCase()}`);
+              throw new Error(t('log.verifyMismatch', {
+                addr: failAddr.toString(16).toUpperCase(),
+                expected: expected.toString(16).padStart(2, '0').toUpperCase(),
+                actual: actual.toString(16).padStart(2, '0').toUpperCase(),
+              }));
             }
           }
 
@@ -363,13 +366,13 @@ function App() {
           const percent = (verifiedBytes / totalBytes) * 100;
 
           setProgress(percent);
-          setProgressLabel(`Verifying 0x${addr.toString(16).toUpperCase()}...`);
+          setProgressLabel(t('log.verifyingAddr', { addr: addr.toString(16).toUpperCase() }));
         }
       }
 
-      addLog('Verify Complete.', 'success');
+      addLog(t('log.verifyComplete'), 'success');
     } catch (err: unknown) {
-      addLog(`Verify Failed: ${getErrorMessage(err)}`, 'error');
+      addLog(t('log.verifyFailed', { error: getErrorMessage(err) }), 'error');
       setStatus('error');
     } finally {
       setStatus('connected');
@@ -381,13 +384,13 @@ function App() {
     try {
       setStatus('working');
       setProgress(0);
-      setProgressLabel('Preparing flash dump...');
+      setProgressLabel(t('log.preparingDump'));
 
       const { baseAddress, flashSize, label } = getDumpConfig();
       const totalChunks = Math.ceil(flashSize / DUMP_CHUNK_SIZE);
       const dumpData = new Uint8Array(flashSize);
 
-      addLog(`Dumping ${flashSize} bytes from 0x${baseAddress.toString(16).toUpperCase()} using ${label}...`, 'info');
+      addLog(t('log.dumping', { size: flashSize, addr: baseAddress.toString(16).toUpperCase(), label }), 'info');
 
       for (let i = 0; i < totalChunks; i++) {
         const start = i * DUMP_CHUNK_SIZE;
@@ -398,15 +401,15 @@ function App() {
 
         const percent = ((start + length) / flashSize) * 100;
         setProgress(percent);
-        setProgressLabel(`Reading 0x${address.toString(16).toUpperCase()}...`);
+        setProgressLabel(t('log.readingAddr', { addr: address.toString(16).toUpperCase() }));
       }
 
       const filename = `at32_flash_0x${deviceInfo.pid.toString(16).toUpperCase()}_${flashSize / 1024}KB.bin`;
       triggerDownload(dumpData, filename);
       setProgress(100);
-      addLog(`Flash dump complete: ${filename}`, 'success');
+      addLog(t('log.dumpComplete', { filename }), 'success');
     } catch (err: unknown) {
-      addLog(`Dump Flash Failed: ${getErrorMessage(err)}`, 'error');
+      addLog(t('log.dumpFailed', { error: getErrorMessage(err) }), 'error');
       setStatus('error');
     } finally {
       setStatus('connected');
@@ -424,15 +427,22 @@ function App() {
             </div>
             <div>
               <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-cyan-300 bg-clip-text text-transparent">
-                AT32 Utility
+                {t('app.title')}
               </h1>
-              <p className="text-slate-500 text-sm">Web Serial Bootloader Utility</p>
+              <p className="text-slate-500 text-sm">{t('app.subtitle')}</p>
             </div>
           </div>
 
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-end">
+            <button
+              onClick={() => setLang(lang === 'en' ? 'zh' : 'en')}
+              className="px-3 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-500 transition-all text-xs font-medium"
+            >
+              <Languages className="w-3.5 h-3.5 inline-block mr-1.5" />
+              {lang === 'en' ? '中文' : 'EN'}
+            </button>
             <div className="flex items-center gap-2 px-3 py-1 bg-slate-900/50 rounded-lg border border-slate-800 w-fit">
-              <span className="text-slate-400 text-xs uppercase tracking-wider font-bold">Baud</span>
+              <span className="text-slate-400 text-xs uppercase tracking-wider font-bold">{t('baud')}</span>
               <select
                 value={baudRate}
                 onChange={(e) => setBaudRate(Number(e.target.value))}
@@ -462,7 +472,7 @@ function App() {
                   loading={status === 'connecting'}
                   icon={<Zap className="w-4 h-4" />}
                 >
-                  {status === 'connecting' ? 'Connecting...' : 'Connect Device'}
+                  {status === 'connecting' ? t('connecting') : t('connect')}
                 </Button>
                 <Button
                   variant="secondary"
@@ -470,12 +480,12 @@ function App() {
                   disabled={status === 'connecting'}
                   icon={<MonitorPlay className="w-4 h-4" />}
                 >
-                  Demo Mode
+                  {t('demoMode')}
                 </Button>
               </div>
             ) : (
               <Button variant="danger" onClick={disconnect} icon={<RotateCcw className="w-4 h-4" />}>
-                Disconnect
+                {t('disconnect')}
               </Button>
             )}
           </div>
@@ -487,9 +497,9 @@ function App() {
             <div className="p-4 bg-slate-800/50 rounded-full inline-block mb-4 text-slate-500">
               <Cpu className="w-12 h-12" />
             </div>
-            <h3 className="text-xl font-medium text-slate-200">No Device Connected</h3>
+            <h3 className="text-xl font-medium text-slate-200">{t('noDevice')}</h3>
             <p className="text-slate-500 mt-2 max-w-md mx-auto">
-              Connect your AT32 device via USB-TTL. Ensure BOOT0 is pulled HIGH and reset the device to enter bootloader mode.
+              {t('noDeviceDesc')}
             </p>
           </Card>
         )}
@@ -500,26 +510,26 @@ function App() {
             {/* Device Info */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <Card className="flex flex-col items-center justify-center py-4 bg-blue-500/5 border-blue-500/20">
-                <span className="text-slate-500 text-xs uppercase font-bold tracking-wider mb-1">Status</span>
+                <span className="text-slate-500 text-xs uppercase font-bold tracking-wider mb-1">{t('status')}</span>
                 <div className="flex items-center gap-2 text-emerald-400 font-medium">
                   <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
-                  {connectionMode === 'demo' ? 'Demo Connected' : 'Connected'}
+                  {connectionMode === 'demo' ? t('demoConnected') : t('connected')}
                 </div>
               </Card>
               <Card className="flex flex-col items-center justify-center py-4">
-                <span className="text-slate-500 text-xs uppercase font-bold tracking-wider mb-1">Product ID</span>
+                <span className="text-slate-500 text-xs uppercase font-bold tracking-wider mb-1">{t('productId')}</span>
                 <span className="font-mono text-lg text-slate-200">
                   {deviceInfo ? `0x${deviceInfo.pid.toString(16).toUpperCase()}` : '...'}
                 </span>
               </Card>
               <Card className="flex flex-col items-center justify-center py-4">
-                <span className="text-slate-500 text-xs uppercase font-bold tracking-wider mb-1">Bootloader</span>
+                <span className="text-slate-500 text-xs uppercase font-bold tracking-wider mb-1">{t('bootloader')}</span>
                 <span className="font-mono text-lg text-slate-200">
                   v{deviceInfo ? deviceInfo.version : '?'}
                 </span>
               </Card>
               <Card className="flex flex-col items-center justify-center py-4">
-                <span className="text-slate-500 text-xs uppercase font-bold tracking-wider mb-1">Erase Mode</span>
+                <span className="text-slate-500 text-xs uppercase font-bold tracking-wider mb-1">{t('eraseMode')}</span>
                 <span className={`text-sm font-medium ${
                   eraseMode === 'sector'
                     ? 'text-cyan-300'
@@ -528,10 +538,10 @@ function App() {
                       : 'text-slate-400'
                 }`}>
                   {eraseMode === 'sector'
-                    ? 'Sector Erase'
+                    ? t('sectorErase')
                     : eraseMode === 'full-chip'
-                      ? 'Full Chip Fallback'
-                      : 'Detecting...'}
+                      ? t('fullChipFallback')
+                      : t('detecting')}
                 </span>
               </Card>
             </div>
@@ -539,10 +549,10 @@ function App() {
             {connectionMode === 'demo' && (
               <Card className="flex items-center justify-between gap-4 border-cyan-500/30 bg-cyan-500/5">
                 <div>
-                  <div className="text-cyan-200 font-medium">Demo Mode</div>
-                  <div className="text-slate-400 text-sm">Using a simulated AT32 device so users can explore the UI without real serial hardware.</div>
+                  <div className="text-cyan-200 font-medium">{t('demoCardTitle')}</div>
+                  <div className="text-slate-400 text-sm">{t('demoCardDesc')}</div>
                 </div>
-                <div className="text-cyan-300 text-xs uppercase tracking-[0.2em] font-bold">Simulation</div>
+                <div className="text-cyan-300 text-xs uppercase tracking-[0.2em] font-bold">{t('simulation')}</div>
               </Card>
             )}
 
@@ -550,8 +560,8 @@ function App() {
               <Card className="space-y-3">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                   <div>
-                    <div className="text-slate-300 font-medium">AT32F43x Device Profile</div>
-                    <div className="text-slate-500 text-sm">Choose the exact capacity tier before partial erase.</div>
+                    <div className="text-slate-300 font-medium">{t('deviceProfile')}</div>
+                    <div className="text-slate-500 text-sm">{t('deviceProfileDesc')}</div>
                   </div>
                   <select
                     value={selectedProfileId}
@@ -559,7 +569,7 @@ function App() {
                     disabled={status === 'working'}
                     className="w-full lg:w-auto lg:min-w-72 text-sm px-3 py-2 rounded-lg bg-slate-900 text-slate-200 border border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/40 disabled:opacity-60"
                   >
-                    <option value="">Select profile...</option>
+                    <option value="">{t('selectProfile')}</option>
                     <option value="at32f43x-xgt7">{DEVICE_PROFILES['at32f43x-xgt7'].label}</option>
                     <option value="at32f43x-xmt7">{DEVICE_PROFILES['at32f43x-xmt7'].label}</option>
                   </select>
@@ -580,18 +590,18 @@ function App() {
                 />
                 <div className="flex items-center gap-4">
                   <Button variant="secondary" onClick={() => fileInputRef.current?.click()} icon={<FileCode className="w-4 h-4" />}>
-                    Select Firmware
+                    {t('selectFirmware')}
                   </Button>
                   {fileInfo ? (
                     <div className="flex-1 flex items-center justify-between px-4 py-2 bg-slate-900/50 rounded-lg border border-slate-700/50">
                       <span className="text-slate-200 font-mono text-sm">{fileInfo.name}</span>
                       <div className='text-right'>
-                        <span className="text-slate-500 text-xs block">{(fileInfo.size / 1024).toFixed(1)} KB</span>
-                        <span className="text-slate-600 text-[10px] block">{fileInfo.segments.length} Segment(s)</span>
+                        <span className="text-slate-500 text-xs block">{(fileInfo.size / 1024).toFixed(1)} {t('kb')}</span>
+                        <span className="text-slate-600 text-[10px] block">{fileInfo.segments.length} {t('segments')}</span>
                       </div>
                     </div>
                   ) : (
-                    <span className="text-slate-500 italic text-sm">Supports .bin, .hex, .elf</span>
+                    <span className="text-slate-500 italic text-sm">{t('supports')}</span>
                   )}
                 </div>
               </div>
@@ -606,7 +616,7 @@ function App() {
                   disabled={status === 'working'}
                   icon={<RotateCcw className="w-4 h-4" />}
                 >
-                  Full Chip Erase
+                  {t('fullChipErase')}
                 </Button>
                 <Button
                   onClick={program}
@@ -614,7 +624,7 @@ function App() {
                   disabled={!fileInfo || status === 'working'}
                   icon={<Play className="w-4 h-4" />}
                 >
-                  Write to Flash
+                  {t('writeToFlash')}
                 </Button>
                 <Button
                   onClick={verify}
@@ -622,7 +632,7 @@ function App() {
                   disabled={!fileInfo || status === 'working'}
                   icon={<CheckCircle className="w-4 h-4" />}
                 >
-                  Verify Flash
+                  {t('verifyFlash')}
                 </Button>
                 <Button
                   onClick={dumpFlash}
@@ -630,14 +640,14 @@ function App() {
                   disabled={status === 'working' || (detectedFamily === 'at32f43x' && !selectedProfileId)}
                   icon={<Download className="w-4 h-4" />}
                 >
-                  Dump Flash
+                  {t('dumpFlash')}
                 </Button>
               </div>
 
               {/* Progress */}
               {status === 'working' && (
                 <div className="pt-4 border-t border-slate-800/50">
-                  <ProgressBar progress={progress} label={progressLabel} status="Processing" />
+                  <ProgressBar progress={progress} label={progressLabel} status={t('processing')} />
                 </div>
               )}
             </Card>
@@ -648,7 +658,7 @@ function App() {
         <Card className="p-0 overflow-hidden bg-black/20">
           <div className="px-4 py-2 bg-slate-900/50 border-b border-slate-800/50 flex items-center gap-2">
             <AlertCircle className="w-4 h-4 text-slate-500" />
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">System Log</span>
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">{t('systemLog')}</span>
           </div>
           <LogViewer logs={logs} />
         </Card>
