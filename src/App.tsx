@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { MockSerialInterface, WebSerialInterface } from './drivers/SerialInterface'
 import type { ISerialInterface } from './drivers/SerialInterface'
 import { AT32Protocol } from './drivers/AT32Protocol'
@@ -40,6 +40,20 @@ function App() {
   const [detectedFamily, setDetectedFamily] = useState<'unknown' | 'at32f43x' | 'other'>('unknown');
   const [selectedProfileId, setSelectedProfileId] = useState<DeviceProfileId | ''>('');
   const [connectionMode, setConnectionMode] = useState<ConnectionMode>(null);
+  const [dumpAddress, setDumpAddress] = useState(FLASH_BASE);
+  const [dumpSize, setDumpSize] = useState(DEFAULT_DUMP_SIZE);
+
+  // Sync dump defaults with profile selection
+  useEffect(() => {
+    if (selectedProfileId) {
+      const profile = DEVICE_PROFILES[selectedProfileId];
+      setDumpAddress(profile.flashBase);
+      setDumpSize(profile.flashSize);
+    } else {
+      setDumpAddress(FLASH_BASE);
+      setDumpSize(DEFAULT_DUMP_SIZE);
+    }
+  }, [selectedProfileId]);
 
   // --- I18n ---
   const { t, lang, setLang } = useI18n();
@@ -54,27 +68,6 @@ function App() {
   const addLog = (msg: string, type: LogEntry['type'] = 'info') => {
     const time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
     setLogs(prev => [...prev.slice(-100), { id: Date.now(), time, message: msg, type }]);
-  };
-
-  const getDumpConfig = () => {
-    if (detectedFamilyRef.current === 'at32f43x') {
-      if (!selectedProfileId) {
-        throw new Error(t('log.selectProfileForDump'));
-      }
-
-      const profile = DEVICE_PROFILES[selectedProfileId];
-      return {
-        baseAddress: profile.flashBase,
-        flashSize: profile.flashSize,
-        label: profile.label
-      };
-    }
-
-    return {
-      baseAddress: FLASH_BASE,
-      flashSize: DEFAULT_DUMP_SIZE,
-      label: 'Generic AT32 (1MB fallback)'
-    };
   };
 
   const triggerDownload = (data: Uint8Array, filename: string) => {
@@ -386,9 +379,14 @@ function App() {
       setProgress(0);
       setProgressLabel(t('log.preparingDump'));
 
-      const { baseAddress, flashSize, label } = getDumpConfig();
+      const baseAddress = dumpAddress;
+      const flashSize = dumpSize;
       const totalChunks = Math.ceil(flashSize / DUMP_CHUNK_SIZE);
       const dumpData = new Uint8Array(flashSize);
+
+      const label = detectedFamilyRef.current === 'at32f43x' && selectedProfileId
+        ? DEVICE_PROFILES[selectedProfileId].label
+        : 'Custom range';
 
       addLog(t('log.dumping', { size: flashSize, addr: baseAddress.toString(16).toUpperCase(), label }), 'info');
 
@@ -404,7 +402,7 @@ function App() {
         setProgressLabel(t('log.readingAddr', { addr: address.toString(16).toUpperCase() }));
       }
 
-      const filename = `at32_flash_0x${deviceInfo.pid.toString(16).toUpperCase()}_${flashSize / 1024}KB.bin`;
+      const filename = `at32_flash_0x${deviceInfo.pid.toString(16).toUpperCase()}_0x${baseAddress.toString(16).toUpperCase()}_${(flashSize / 1024)}KB.bin`;
       triggerDownload(dumpData, filename);
       setProgress(100);
       addLog(t('log.dumpComplete', { filename }), 'success');
@@ -642,6 +640,44 @@ function App() {
                 >
                   {t('dumpFlash')}
                 </Button>
+              </div>
+
+              {/* Dump Range Configuration */}
+              <div className="flex flex-wrap items-end gap-4 pt-4 border-t border-slate-800/50">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs text-slate-500 uppercase tracking-wider font-bold">
+                    {t('dumpStartAddress')}
+                  </label>
+                  <input
+                    type="text"
+                    value={'0x' + dumpAddress.toString(16).toUpperCase()}
+                    onChange={(e) => {
+                      const raw = e.target.value.replace(/^0x/i, '');
+                      if (raw === '') return;
+                      const val = parseInt(raw, 16);
+                      if (!isNaN(val) && val >= 0) setDumpAddress(val);
+                    }}
+                    disabled={status === 'working'}
+                    className="font-mono text-sm w-36 px-3 py-2 rounded-lg bg-slate-900 text-slate-200 border border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/40 disabled:opacity-60"
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs text-slate-500 uppercase tracking-wider font-bold">
+                    {t('dumpSize')}
+                  </label>
+                  <input
+                    type="number"
+                    value={dumpSize}
+                    onChange={(e) => setDumpSize(Math.max(256, Number(e.target.value)))}
+                    disabled={status === 'working'}
+                    min={256}
+                    step={256}
+                    className="font-mono text-sm w-36 px-3 py-2 rounded-lg bg-slate-900 text-slate-200 border border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/40 disabled:opacity-60"
+                  />
+                </div>
+                <span className="text-xs text-slate-500 pb-1.5 font-mono">
+                  ~ 0x{(dumpAddress + dumpSize - 1).toString(16).toUpperCase()}
+                </span>
               </div>
 
               {/* Progress */}
