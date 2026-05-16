@@ -12,7 +12,12 @@
 - 单文件发布，构建后可直接分发 `index.html`
 - 基于 Web Serial API 与 USB-TTL 直接通信
 - 支持 `.bin`、`.hex`、`.elf` 固件格式
-- 支持擦除、烧写、校验等基础 Bootloader 操作
+- 支持擦除、烧写、校验、**导出 Flash** 等 Bootloader 操作
+- 导出 Flash 支持自定义起始地址和范围
+- BIN 文件可自定义基地址
+- 演示模式，无需硬件即可体验完整流程
+- 自动检测 AT32F435/F437 系列，支持扇区擦除
+- 支持中英文界面切换
 - 使用 React 和 Tailwind CSS 构建界面
 
 ## 快速开始
@@ -57,21 +62,32 @@ npm run build
    - 点击 `Connect Device`
    - 在浏览器弹窗中选择正确串口
    - 默认波特率为 `256000`，可按需要手动调整
+   - 也可点击 `Demo Mode` 无需硬件体验完整操作流程
 
 2. 选择固件
    - 点击 `Select Firmware`
    - 选择 `.bin`、`.hex` 或 `.elf` 文件
+   - 若选择 `.bin` 文件，可在文件名下方修改**基地址**（默认 `0x08000000`）
 
 3. 执行操作
    - `Full Chip Erase`：整片擦除
    - `Write to Flash`：写入固件
    - `Verify Flash`：回读并校验写入结果
+   - `Dump Flash`：导出 Flash 内容为 `.bin` 文件，可在下方自定义**起始地址**和**范围**
+
+### 设备配置
+
+AT32F435/F437 系列芯片连接后会自动识别，需手动选择容量等级（xGT7 / xMT7），以支持扇区擦除和准确的 Flash 导出范围。
+
+### 语言切换
+
+点击右上角 `EN / 中文` 按钮可切换界面语言。
 
 ## 支持的文件格式
 
 | 格式 | 说明 | 基地址 |
 |------|------|--------|
-| `.bin` | 原始二进制 | `0x08000000`（默认） |
+| `.bin` | 原始二进制 | `0x08000000`（默认，可修改） |
 | `.hex` | Intel HEX | 从文件内容解析 |
 | `.elf` | ELF 可执行文件 | 从可加载段解析 |
 
@@ -124,6 +140,8 @@ AT32-WebISP/
 │   ├── drivers/
 │   │   ├── AT32Protocol.ts
 │   │   └── SerialInterface.ts
+│   ├── i18n/
+│   │   └── translations.ts
 │   └── utils/
 │       └── FileParsers.ts
 ├── .github/
