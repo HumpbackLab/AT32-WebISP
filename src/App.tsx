@@ -42,6 +42,7 @@ function App() {
   const [connectionMode, setConnectionMode] = useState<ConnectionMode>(null);
   const [dumpAddress, setDumpAddress] = useState(FLASH_BASE);
   const [dumpSize, setDumpSize] = useState(DEFAULT_DUMP_SIZE);
+  const [binBaseAddress, setBinBaseAddress] = useState(FLASH_BASE);
 
   // Sync dump defaults with profile selection
   useEffect(() => {
@@ -63,6 +64,7 @@ function App() {
   const protocolRef = useRef<AT32Protocol | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const detectedFamilyRef = useRef<'unknown' | 'at32f43x' | 'other'>('unknown');
+  const rawBinBufferRef = useRef<ArrayBuffer | null>(null);
 
   // --- Helpers ---
   const addLog = (msg: string, type: LogEntry['type'] = 'info') => {
@@ -183,18 +185,19 @@ function App() {
     try {
       const buf = await f.arrayBuffer();
       let segments: FirmwareSegment[] = [];
+      const isBin = f.name.toLowerCase().endsWith('.bin');
 
-      if (f.name.toLowerCase().endsWith('.hex')) {
+      if (isBin) {
+        rawBinBufferRef.current = buf;
+        segments = FileParsers.parseBin(buf, binBaseAddress);
+        addLog(t('log.parsedBin', { addr: '0x' + binBaseAddress.toString(16).toUpperCase() }), 'info');
+      } else if (f.name.toLowerCase().endsWith('.hex')) {
         const text = new TextDecoder().decode(buf);
         segments = FileParsers.parseHex(text);
         addLog(t('log.parsedHex', { count: segments.length }), 'info');
       } else if (f.name.toLowerCase().endsWith('.elf')) {
         segments = FileParsers.parseElf(buf);
         addLog(t('log.parsedElf', { count: segments.length }), 'info');
-      } else {
-        // Default to .bin
-        segments = FileParsers.parseBin(buf);
-        addLog(t('log.parsedBin'), 'info');
       }
 
       if (segments.length === 0) {
@@ -209,6 +212,15 @@ function App() {
 
     } catch (err: unknown) {
       addLog(t('log.failedToLoad', { error: getErrorMessage(err) }), 'error');
+    }
+  };
+
+  const handleBinAddressChange = (address: number) => {
+    setBinBaseAddress(address);
+    if (rawBinBufferRef.current && fileInfo?.name.toLowerCase().endsWith('.bin')) {
+      const segments = FileParsers.parseBin(rawBinBufferRef.current, address);
+      setFileInfo({ ...fileInfo, segments });
+      addLog(t('log.parsedBin', { addr: '0x' + address.toString(16).toUpperCase() }), 'info');
     }
   };
 
@@ -591,12 +603,33 @@ function App() {
                     {t('selectFirmware')}
                   </Button>
                   {fileInfo ? (
-                    <div className="flex-1 flex items-center justify-between px-4 py-2 bg-slate-900/50 rounded-lg border border-slate-700/50">
-                      <span className="text-slate-200 font-mono text-sm">{fileInfo.name}</span>
-                      <div className='text-right'>
-                        <span className="text-slate-500 text-xs block">{(fileInfo.size / 1024).toFixed(1)} {t('kb')}</span>
-                        <span className="text-slate-600 text-[10px] block">{fileInfo.segments.length} {t('segments')}</span>
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between px-4 py-2 bg-slate-900/50 rounded-lg border border-slate-700/50">
+                        <span className="text-slate-200 font-mono text-sm">{fileInfo.name}</span>
+                        <div className='text-right'>
+                          <span className="text-slate-500 text-xs block">{(fileInfo.size / 1024).toFixed(1)} {t('kb')}</span>
+                          <span className="text-slate-600 text-[10px] block">{fileInfo.segments.length} {t('segments')}</span>
+                        </div>
                       </div>
+                      {fileInfo.name.toLowerCase().endsWith('.bin') && (
+                        <div className="flex items-center gap-2 mt-2 px-1">
+                          <label className="text-xs text-slate-500 uppercase tracking-wider font-bold">
+                            {t('binBaseAddr')}
+                          </label>
+                          <input
+                            type="text"
+                            value={'0x' + binBaseAddress.toString(16).toUpperCase()}
+                            onChange={(e) => {
+                              const raw = e.target.value.replace(/^0x/i, '');
+                              if (raw === '') return;
+                              const val = parseInt(raw, 16);
+                              if (!isNaN(val) && val >= 0) handleBinAddressChange(val);
+                            }}
+                            disabled={status === 'working'}
+                            className="font-mono text-xs w-28 px-2 py-1 rounded bg-slate-900 text-slate-200 border border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/40 disabled:opacity-60"
+                          />
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <span className="text-slate-500 italic text-sm">{t('supports')}</span>

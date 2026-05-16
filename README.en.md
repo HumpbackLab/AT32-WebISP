@@ -12,7 +12,12 @@ A browser-based firmware programming utility for AT32 microcontrollers using Web
 - Single-file distribution via built `index.html`
 - Direct USB-TTL communication through Web Serial API
 - Support for `.bin`, `.hex`, and `.elf` firmware files
-- Core bootloader operations: erase, program, and verify
+- Bootloader operations: erase, program, verify, and **dump flash**
+- Configurable start address and size for flash dump
+- Customizable base address for BIN files
+- Demo mode to experience the full workflow without hardware
+- Automatic AT32F435/F437 detection with sector erase support
+- English and Chinese interface languages
 - UI built with React and Tailwind CSS
 
 ## Quick Start
@@ -57,21 +62,32 @@ The output file is `dist/index.html`.
    - Click `Connect Device`
    - Select the correct serial port in the browser prompt
    - The default baud rate is `256000`, and it remains configurable
+   - Or click `Demo Mode` to try the full workflow without hardware
 
 2. Select firmware
    - Click `Select Firmware`
    - Choose a `.bin`, `.hex`, or `.elf` file
+   - For `.bin` files, the **base address** (default `0x08000000`) can be modified below the filename
 
 3. Run operations
    - `Full Chip Erase`: erase the whole flash
    - `Write to Flash`: program the firmware
    - `Verify Flash`: read back and verify written data
+   - `Dump Flash`: dump flash contents to a `.bin` file, with configurable **start address** and **size**
+
+### Device Profile
+
+AT32F435/F437 devices are auto-detected on connection. Select the exact capacity tier (xGT7 / xMT7) to enable sector erase and accurate flash dump range.
+
+### Language
+
+Click the `EN / 中文` button in the top-right corner to switch between English and Chinese.
 
 ## Supported Formats
 
 | Format | Description | Base Address |
 |--------|-------------|--------------|
-| `.bin` | Raw binary | `0x08000000` (default) |
+| `.bin` | Raw binary | `0x08000000` (default, adjustable) |
 | `.hex` | Intel HEX | Parsed from file content |
 | `.elf` | ELF executable | Parsed from loadable segments |
 
@@ -124,6 +140,8 @@ AT32-WebISP/
 │   ├── drivers/
 │   │   ├── AT32Protocol.ts
 │   │   └── SerialInterface.ts
+│   ├── i18n/
+│   │   └── translations.ts
 │   └── utils/
 │       └── FileParsers.ts
 ├── .github/
