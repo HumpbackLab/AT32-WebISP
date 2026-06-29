@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { MockSerialInterface, WebSerialInterface } from './drivers/SerialInterface'
 import type { ISerialInterface } from './drivers/SerialInterface'
 import { AT32Protocol } from './drivers/AT32Protocol'
-import { DEVICE_PROFILES, getSectorsForSegments, type DeviceProfileId } from './drivers/deviceProfiles'
+import { DEVICE_PROFILES, getSectorsForSegments, detectFamilyFromPID, isKnownFamily, type DeviceProfileId } from './drivers/deviceProfiles'
 import { Card, Button, ProgressBar } from './components/Common'
 import { LogViewer } from './components/LogViewer'
 import { FileParsers, type FirmwareSegment } from './utils/FileParsers'
@@ -37,7 +37,7 @@ function App() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [baudRate, setBaudRate] = useState(256000);
   const [eraseMode, setEraseMode] = useState<EraseMode>('unknown');
-  const [detectedFamily, setDetectedFamily] = useState<'unknown' | 'at32f43x' | 'other'>('unknown');
+  const [detectedFamily, setDetectedFamily] = useState<'unknown' | 'at32f43x' | 'at32f421' | 'at32f425' | 'other'>('unknown');
   const [selectedProfileId, setSelectedProfileId] = useState<DeviceProfileId | ''>('');
   const [connectionMode, setConnectionMode] = useState<ConnectionMode>(null);
   const [dumpAddress, setDumpAddress] = useState(FLASH_BASE);
@@ -63,7 +63,7 @@ function App() {
   const serialRef = useRef<ISerialInterface | null>(null);
   const protocolRef = useRef<AT32Protocol | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const detectedFamilyRef = useRef<'unknown' | 'at32f43x' | 'other'>('unknown');
+  const detectedFamilyRef = useRef<'unknown' | 'at32f43x' | 'at32f421' | 'at32f425' | 'other'>('unknown');
   const rawBinBufferRef = useRef<ArrayBuffer | null>(null);
 
   // --- Helpers ---
@@ -112,20 +112,44 @@ function App() {
       addLog(t('log.connectedPid', { pid: id.pid.toString(16).toUpperCase(), version: ver.version }), 'success');
 
       try {
-        const isF435437Family = await protocol.detectF435437Family();
-        const family = isF435437Family ? 'at32f43x' : 'other';
-        detectedFamilyRef.current = family;
-        setDetectedFamily(family);
-        setEraseMode(isF435437Family ? 'unknown' : 'full-chip');
+        // First, try PID-based family detection
+        const pidFamily = detectFamilyFromPID(id.pid);
 
-        if (isF435437Family) {
-          if (mode === 'demo') {
-            setSelectedProfileId('at32f43x-xgt7');
+        if (pidFamily) {
+          detectedFamilyRef.current = pidFamily;
+          setDetectedFamily(pidFamily);
+          setEraseMode('unknown');
+
+          if (pidFamily === 'at32f421') {
+            if (mode === 'demo') {
+              setSelectedProfileId('at32f421-x8');
+            }
+            addLog(t('log.detectedF421'), 'info');
+            addLog(mode === 'demo' ? t('log.demoDefaultedF421') : t('log.selectExactF421Device'), 'warning');
+          } else if (pidFamily === 'at32f425') {
+            if (mode === 'demo') {
+              setSelectedProfileId('at32f425-x8');
+            }
+            addLog(t('log.detectedF425'), 'info');
+            addLog(mode === 'demo' ? t('log.demoDefaultedF425') : t('log.selectExactF425Device'), 'warning');
           }
-          addLog(t('log.detectedF43x'), 'info');
-          addLog(mode === 'demo' ? t('log.demoDefaulted') : t('log.selectExactDevice'), 'warning');
         } else {
-          addLog(t('log.unknownDevice'), 'warning');
+          // Fall back to SLIB-based detection for F435/F437
+          const isF435437Family = await protocol.detectF435437Family();
+          const family = isF435437Family ? 'at32f43x' : 'other';
+          detectedFamilyRef.current = family;
+          setDetectedFamily(family);
+          setEraseMode(isF435437Family ? 'unknown' : 'full-chip');
+
+          if (isF435437Family) {
+            if (mode === 'demo') {
+              setSelectedProfileId('at32f43x-xgt7');
+            }
+            addLog(t('log.detectedF43x'), 'info');
+            addLog(mode === 'demo' ? t('log.demoDefaulted') : t('log.selectExactDevice'), 'warning');
+          } else {
+            addLog(t('log.unknownDevice'), 'warning');
+          }
         }
       } catch (err: unknown) {
         detectedFamilyRef.current = 'other';
@@ -268,7 +292,7 @@ function App() {
         setProgress((old) => Math.min(old + 1, PROGRAM_ERASE_PROGRESS_MAX - 1));
       }, 250);
 
-      if (detectedFamilyRef.current === 'at32f43x') {
+      if (isKnownFamily(detectedFamilyRef.current)) {
         if (!selectedProfileId) {
           throw new Error(t('log.selectProfileForProgram'));
         }
@@ -396,7 +420,7 @@ function App() {
       const totalChunks = Math.ceil(flashSize / DUMP_CHUNK_SIZE);
       const dumpData = new Uint8Array(flashSize);
 
-      const label = detectedFamilyRef.current === 'at32f43x' && selectedProfileId
+      const label = isKnownFamily(detectedFamilyRef.current) && selectedProfileId
         ? DEVICE_PROFILES[selectedProfileId].label
         : 'Custom range';
 
@@ -587,6 +611,49 @@ function App() {
               </Card>
             )}
 
+            {detectedFamily === 'at32f421' && (
+              <Card className="space-y-3">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                  <div>
+                    <div className="text-slate-300 font-medium">{t('f421DeviceProfile')}</div>
+                    <div className="text-slate-500 text-sm">{t('f421DeviceProfileDesc')}</div>
+                  </div>
+                  <select
+                    value={selectedProfileId}
+                    onChange={(e) => setSelectedProfileId(e.target.value as DeviceProfileId | '')}
+                    disabled={status === 'working'}
+                    className="w-full lg:w-auto lg:min-w-72 text-sm px-3 py-2 rounded-lg bg-slate-900 text-slate-200 border border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/40 disabled:opacity-60"
+                  >
+                    <option value="">{t('selectProfile')}</option>
+                    <option value="at32f421-x4">{DEVICE_PROFILES['at32f421-x4'].label}</option>
+                    <option value="at32f421-x6">{DEVICE_PROFILES['at32f421-x6'].label}</option>
+                    <option value="at32f421-x8">{DEVICE_PROFILES['at32f421-x8'].label}</option>
+                  </select>
+                </div>
+              </Card>
+            )}
+
+            {detectedFamily === 'at32f425' && (
+              <Card className="space-y-3">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                  <div>
+                    <div className="text-slate-300 font-medium">{t('f425DeviceProfile')}</div>
+                    <div className="text-slate-500 text-sm">{t('f425DeviceProfileDesc')}</div>
+                  </div>
+                  <select
+                    value={selectedProfileId}
+                    onChange={(e) => setSelectedProfileId(e.target.value as DeviceProfileId | '')}
+                    disabled={status === 'working'}
+                    className="w-full lg:w-auto lg:min-w-72 text-sm px-3 py-2 rounded-lg bg-slate-900 text-slate-200 border border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/40 disabled:opacity-60"
+                  >
+                    <option value="">{t('selectProfile')}</option>
+                    <option value="at32f425-x6">{DEVICE_PROFILES['at32f425-x6'].label}</option>
+                    <option value="at32f425-x8">{DEVICE_PROFILES['at32f425-x8'].label}</option>
+                  </select>
+                </div>
+              </Card>
+            )}
+
             {/* Operations Area */}
             <Card className="space-y-6">
               {/* File Selection */}
@@ -668,7 +735,7 @@ function App() {
                 <Button
                   onClick={dumpFlash}
                   variant="secondary"
-                  disabled={status === 'working' || (detectedFamily === 'at32f43x' && !selectedProfileId)}
+                  disabled={status === 'working' || (isKnownFamily(detectedFamily) && !selectedProfileId)}
                   icon={<Download className="w-4 h-4" />}
                 >
                   {t('dumpFlash')}
